@@ -1,0 +1,66 @@
+version: 2
+
+project_name: posthaste
+
+before:
+  hooks:
+    - pnpm --dir web build
+
+builds:
+  - id: posthaste
+    main: .
+    binary: posthaste
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: posthaste
+    ids:
+      - posthaste
+    formats:
+      - tar.gz
+    name_template: "posthaste_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - .env.example
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+dockers_v2:
+  - id: posthaste
+    ids:
+      - posthaste
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/real-uangi/posthaste
+    tags:
+      - "{{ .Tag }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.source: https://github.com/real-uangi/posthaste
+      org.opencontainers.image.version: "{{ .Tag }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+    annotations:
+      org.opencontainers.image.source: https://github.com/real-uangi/posthaste
+      org.opencontainers.image.version: "{{ .Tag }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+
+release:
+  github:
+    owner: real-uangi
+    name: posthaste
+  draft: false
+  prerelease: false

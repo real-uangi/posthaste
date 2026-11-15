@@ -77,7 +77,31 @@ make build
 
 `make check` 构建真实前端资源，执行前端单元测试、服务端单测/race/vet，以及 SDK 独立单测/race/vet；这些检查不启动 HTTP、数据库或真实平台。`make build` 输出 `bin/posthaste`，不运行程序。
 
-Go embed 在编译时需要真实 `web/dist`，因此不能跳过前端 build 直接编译一个干净 checkout。`node_modules`、`dist`、测试产物和二进制不入库。CI 的 server job 先构建前端再检查 Go，SDK 使用单独 job；工作流只做检查，不部署、不发版。
+Go embed 在编译时需要真实 `web/dist`，因此不能跳过前端 build 直接编译一个干净 checkout。`node_modules`、`dist`、测试产物和二进制不入库。main/PR 的 Checks 先构建前端再检查 Go，SDK 使用独立 job；标签发布复用同一套检查，通过后才发布制品，不自动部署。
+
+## 标签发布与容器
+
+[Release 工作流](.github/workflows/release.yml) 仅由仓库根版本标签 `vX.Y.Z` 的 push 触发，稳定版本号不接受前导零、预发布或构建后缀。发布标签解析出的提交必须属于 `origin/main` 历史，可以发布已合入 main 的历史提交，不限于当前 main 顶端。
+
+发布顺序是：先让工作流和待发布代码进入 main，再为满足条件的提交创建并推送版本标签；被打标签的提交本身必须包含发布工作流、GoReleaser 配置和 Dockerfile，因为 GitHub 按标签提交读取工作流。工作流执行版本/分支归属 gate → 可复用 Checks → GoReleaser 发布。SDK 的 `sdk/go/vX.Y.Z` 标签独立管理，不触发服务端发布。仅修改配置或执行本地 snapshot 验证不会正式发布，显式推送版本标签后才触发发布流程。
+
+一次成功发布产出：
+
+- GitHub 同名标签的 Release：`posthaste_vX.Y.Z_linux_amd64.tar.gz`、`posthaste_vX.Y.Z_linux_arm64.tar.gz` 和 SHA256 `checksums.txt`；归档仅含静态程序与公开占位配置 `.env.example`。
+- 多架构镜像：`ghcr.io/real-uangi/posthaste:vX.Y.Z`，支持 `linux/amd64`、`linux/arm64`，并更新 `latest`。`latest` 指最近一次成功的镜像发布，不保证是当前 main 或最高版本；部署可固定版本标签。
+
+镜像使用含 CA 证书的 `gcr.io/distroless/static-debian13:nonroot`，默认 `RUN_MODE=release`、`HTTP_PORT=8080`。镜像只包含对应架构的静态程序，不包含 `.env`、运行时密钥或数据库；制品和镜像分别由 [GoReleaser 配置](.goreleaser.yaml) 与 [Dockerfile](Dockerfile) 定义。
+
+GHCR 首个 package 默认是 private。首发后，组织管理员需手动将其设置为 public，并验收匿名拉取；后续发布继承 package 可见性，源码仓库 public 不会自动公开镜像包。
+
+镜像发布且已完成可见性设置后，可按以下示例运行；命令仅为部署说明，本次未执行：
+
+```sh
+docker pull ghcr.io/real-uangi/posthaste:v0.1.0
+docker run --rm --name posthaste --env-file .env -p 8080:8080 ghcr.io/real-uangi/posthaste:v0.1.0
+```
+
+运行前按下节配置容器可访问的 PostgreSQL DSN、公开 HTTPS 地址和真实密钥；容器不会自动创建数据库。归档中的静态程序也可解压后直接运行，使用同一套环境配置。
 
 ## 配置与运行前提
 

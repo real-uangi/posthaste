@@ -86,7 +86,16 @@
 - API 变更必须同步检查服务端、HTTP 文档、SDK 类型、示例与契约测试；不能通过复用内部模型消除必要的客户端边界。
 - 使用 `sdk/go/vX.Y.Z` 独立标签；兼容的增加字段不应破坏旧客户端。未经授权不得打标签、push 或发布。
 
-## 9. 验证与完成标准
+## 9. 发布边界
+
+- main/PR 使用只读 Checks；Release 仅由服务端根标签 `vX.Y.Z` 的 push 触发，经严格稳定版本格式与 `origin/main` 历史归属 gate 后复用 Checks，成功后才 publish。可以发布包含发布配置的 main 历史提交，不将 gate 改成只能发布 main 顶端。
+- 发布固定使用 GoReleaser OSS v2.15.2、`dockers_v2` 与 Buildx；前端按 frozen lockfile 安装，before 仅构建 web，CGO=0 交叉编译 Linux amd64/arm64，不使用 QEMU 或运行应用进行版本探测。
+- GitHub Release 保存含完整 v 标签的两架构 tar.gz 与 SHA256 checksums.txt；GHCR 发布版本标签和 latest。latest 只表示最近成功镜像发布，不保证 main 或最高版本。
+- 写权限只授予 publish，使用 GITHUB_TOKEN 的 contents/packages write。镜像只复制静态程序，使用含 CA 的 distroless 非 root 运行时，不纳入 `.env`、密钥或数据库。
+- SDK 标签保持独立、不触发服务端 Release。清理 SDK 标签仅限临时 publisher checkout 的本地引用，必须显式设置 `GORELEASER_CURRENT_TAG`，禁止删除远端标签。
+- GHCR 首发后由组织管理员手动设置 package public 并验收匿名拉取；源码 public 不等于镜像 public。新增发布配置不授权创建标签、commit、push、正式发布或部署。
+
+## 10. 验证与完成标准
 
 - 禁止启动 dev server 验证项目。未经明确授权，不启动真实数据库、中间件、依赖它们的集成测试或真实平台联调。
 - 运行会产生后台进程、持续监听端口或大量资源消耗的命令前，先获得徐总确认。协议测试使用模拟 RoundTripper 与 HTTP recorder，不使用 `httptest.NewServer`。

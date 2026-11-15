@@ -243,7 +243,19 @@ Go SDK 为 `sdk/go` 独立模块，仅标准库，使用公开 HTTP 协议，不
 
 所有消息入口变更同步检查 API、SDK、示例和测试；目标平台扩展同步检查 Sender、fx 注册、后台配置表单及平台文档。纯单元测试与编译不替代 PostgreSQL、浏览器和真实平台验收；具体执行状态见 README 及交付记录。
 
-## 10. 依据与参考
+## 10. 发布与容器架构
+
+`release.yml` 只监听 `push` 的 `v*` 标签，在 gate 中严格接受 `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`，并验证 `tag^{commit}` 是 `origin/main` 的祖先。验证历史归属而非仅比较 main 顶端 SHA；被打标签的提交本身必须包含发布工作流、GoReleaser 配置、Dockerfile 和待发布代码。
+
+流水线顺序为 gate → 可复用 Checks → publish。Checks 保留现有 main/PR 触发，同时提供 `workflow_call`，以只读权限执行前端、服务端、独立 SDK 和 GoReleaser 配置检查；仅 publish 使用 `contents: write`、`packages: write` 和 `GITHUB_TOKEN` 创建 GitHub Release 并推送 GHCR，不提供运行时数据库或平台密钥。
+
+根 [.goreleaser.yaml](.goreleaser.yaml) 固定使用 GoReleaser OSS `v2.15.2`：CI 按 frozen lockfile 安装前端依赖，GoReleaser 的 before 只执行 `pnpm --dir web build`，再以 `CGO_ENABLED=0` 交叉编译 `linux/amd64` 和 `linux/arm64`。按完整标签（含 `v`）命名两份 `posthaste_<tag>_linux_<arch>.tar.gz` 归档，仅包含程序和公开占位配置 `.env.example`，生成 SHA256 `checksums.txt` 后上传至同标签 GitHub Release。
+
+镜像通过 `dockers_v2` 和 Buildx 组装，不使用 QEMU。根 [Dockerfile](Dockerfile) 基于包含 CA 证书的 `gcr.io/distroless/static-debian13:nonroot`，只 COPY `TARGETPLATFORM` 对应静态产物，没有 RUN 指令，不执行目标程序、添加 `--version` 探测、构建前端或包含 `.env`/密钥/数据库；默认 release 模式和 8080 端口。版本标签与 `latest` 指向 `ghcr.io/real-uangi/posthaste` 的多架构镜像；`latest` 表示最近一次成功镜像发布，不表达 main 或最高版本。
+
+SDK 标签不触发此工作流。为防 GoReleaser 从 `sdk/go/*` 误选 prior tag，仅在临时 publisher checkout 删除本地 SDK 标签，并通过 `GORELEASER_CURRENT_TAG` 显式指定服务端标签；不删除远端标签或修改 SDK 发布机制。GHCR 初次发布后由组织管理员手动公开 package 并验证匿名拉取，仓库可见性不替代 package 可见性。容器使用方法见 README；本地配置验证不等于正式发布或部署验收。
+
+## 11. 依据与参考
 
 - 本机 Icebreaker 的 `AGENTS.md`、`main.go`、各域 `fx.go` 和事件装配：参考其工程边界，避免复制与现行规范不一致的历史 IO 写法。
 - [allingo](https://github.com/real-uangi/allingo)：公共模块、数据库、HTTP、结果信封与进程生命周期；生命周期细节同时核对本机 v0.1.14 源码。
