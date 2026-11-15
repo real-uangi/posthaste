@@ -48,9 +48,11 @@ export default function AccountEditor({ account, onSaved, onCancel, onUnauthoriz
             <select value={draft.platform} disabled={Boolean(account)} onChange={(e) => set("platform", e.target.value as Platform)}>
               <option value="telegram">Telegram Bot</option>
               <option value="feishu">飞书群Webhook</option>
+              <option value="feishu_app">飞书应用机器人</option>
             </select>
           </label>
           {draft.platform === "feishu" && <p className="field-note">一个 Webhook 固定一个飞书群，每个账号只能配置一个群组出口。</p>}
+          {draft.platform === "feishu_app" && <p className="field-note">支持国内飞书企业自建应用。先保存账号，再从机器人已加入的群中选择群组出口。</p>}
           <div className="form-section">
             <div className="section-caption"><h3>平台凭证</h3>{account?.credentialsConfigured && <span className="subtle-label">已配置</span>}</div>
             {account?.credentialsConfigured && <label className="check-line"><input type="checkbox" checked={draft.replaceCredentials} onChange={(e) => set("replaceCredentials", e.target.checked)} /><span>更换已保存的凭证</span></label>}
@@ -60,6 +62,11 @@ export default function AccountEditor({ account, onSaved, onCancel, onUnauthoriz
               <label className="field"><span>机器人 Webhook</span><input required type="password" autoComplete="new-password" value={draft.webhookUrl} onChange={(e) => set("webhookUrl", e.target.value)} placeholder="粘贴完整的 Webhook 地址" spellCheck={false} /></label>
               <label className="field"><span>签名密钥 <small>可选</small></span><input type="password" autoComplete="new-password" value={draft.signingSecret} onChange={(e) => set("signingSecret", e.target.value)} placeholder="机器人开启签名校验时填写" spellCheck={false} /></label>
               {account && <p className="field-note">凭证将整体替换；签名密钥留空会移除原签名配置。</p>}
+            </>}
+            {draft.replaceCredentials && draft.platform === "feishu_app" && <>
+              <label className="field"><span>App ID</span><input required autoComplete="off" value={draft.appId} onChange={(e) => set("appId", e.target.value)} placeholder="填写企业自建应用的 App ID" spellCheck={false} /></label>
+              <label className="field"><span>App Secret</span><input required type="password" autoComplete="new-password" value={draft.appSecret} onChange={(e) => set("appSecret", e.target.value)} placeholder="填写应用密钥" spellCheck={false} /></label>
+              {account && <p className="field-note">App ID 和 App Secret 将整体替换，请填写完整凭证。</p>}
             </>}
             {account && draft.replaceCredentials && <p className="field-note warning-text">保存后，此账号下的所有群组出口都将使用新凭证。</p>}
           </div>

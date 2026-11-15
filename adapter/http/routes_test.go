@@ -28,18 +28,19 @@ const (
 
 type protocolStore struct {
 	domain.Store
-	routes           []domain.Route
-	routeErr         error
-	requested        []string
-	accounts         map[string]domain.Account
-	savedAccounts    []domain.SaveAccount
-	deletedAccounts  []string
-	deleteAccountErr error
-	targets          []domain.Target
-	snapshot         domain.TargetSnapshot
-	savedTargets     []domain.SaveTarget
-	saveTargetErr    error
-	savedGroups      []domain.SaveGroup
+	routes             []domain.Route
+	routeErr           error
+	requested          []string
+	accounts           map[string]domain.Account
+	accountCredentials json.RawMessage
+	savedAccounts      []domain.SaveAccount
+	deletedAccounts    []string
+	deleteAccountErr   error
+	targets            []domain.Target
+	snapshot           domain.TargetSnapshot
+	savedTargets       []domain.SaveTarget
+	saveTargetErr      error
+	savedGroups        []domain.SaveGroup
 }
 
 func (s *protocolStore) Routes(_ context.Context, caller string) ([]domain.Route, error) {
@@ -57,6 +58,11 @@ func (s *protocolStore) Account(_ context.Context, id string) (domain.Account, e
 		return domain.Account{}, domain.ErrNotFound
 	}
 	return account, nil
+}
+
+func (s *protocolStore) AccountSnapshot(ctx context.Context, id string) (domain.AccountSnapshot, error) {
+	account, err := s.Account(ctx, id)
+	return domain.AccountSnapshot{Account: account, Credentials: s.accountCredentials}, err
 }
 
 func (s *protocolStore) ListAccounts(context.Context) ([]domain.Account, error) {
@@ -120,6 +126,15 @@ func (p *protocolPublisher) Publish(envelope domain.Envelope) error {
 type protocolSender struct {
 	credentials []json.RawMessage
 	configs     []json.RawMessage
+	chatPage    domain.ChatPage
+	chatErr     error
+	chatCursors []string
+}
+
+func (s *protocolSender) ListChats(_ context.Context, credentials json.RawMessage, pageToken string) (domain.ChatPage, error) {
+	s.credentials = append(s.credentials, credentials)
+	s.chatCursors = append(s.chatCursors, pageToken)
+	return s.chatPage, s.chatErr
 }
 
 func (*protocolSender) Platform() string { return "feishu" }
@@ -157,7 +172,7 @@ func newProtocolHarness(t *testing.T) protocolHarness {
 	store.snapshot = store.routes[0].Targets[0]
 	publisher := &protocolPublisher{}
 	sender := &protocolSender{}
-	notifications, err := notificationapp.NewService(store, publisher, []domain.Sender{sender}, time.Second)
+	notifications, err := notificationapp.NewService(store, publisher, []domain.Sender{sender}, sender, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +242,61 @@ func protocolLogin(t *testing.T, h protocolHarness) *http.Cookie {
 	}
 	t.Fatal("login did not set a session cookie")
 	return nil
+}
+
+func TestAccountChatListRequiresAdminAndUsesOpaqueCursor(t *testing.T) {
+	h := newProtocolHarness(t)
+	path := "/api/v1/admin/accounts/chats/list?accountId=" + routeAccountID + "&pageToken=cursor%2B%2F%3D%3F"
+	requireProtocolEnvelope(t, protocolRequest(h.engine, http.MethodGet, path, "", nil), http.StatusUnauthorized)
+	cookie := protocolLogin(t, h)
+	h.store.accounts[routeAccountID] = domain.Account{ID: routeAccountID, Platform: "feishu_app", Enabled: false}
+	h.store.accountCredentials = json.RawMessage(`{"appId":"app","appSecret":"private-app-secret"}`)
+	h.sender.chatPage = domain.ChatPage{Items: []domain.Chat{{ChatID: "oc_one", Name: "operations"}}, HasMore: true, NextPageToken: "next+/="}
+	response := protocolRequest(h.engine, http.MethodGet, path, "", nil, cookie)
+	envelope := requireProtocolEnvelope(t, response, http.StatusOK)
+	var page domain.ChatPage
+	if err := json.Unmarshal(envelope.Data, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ChatID != "oc_one" || !page.HasMore || page.NextPageToken != "next+/=" {
+		t.Fatalf("unexpected chat page: %+v", page)
+	}
+	if response.Header().Get("Cache-Control") != "no-store" || len(h.sender.chatCursors) != 1 || h.sender.chatCursors[0] != "cursor+/=?" {
+		t.Fatal("missing no-store or cursor was not decoded correctly")
+	}
+	if len(h.sender.credentials) != 1 || string(h.sender.credentials[0]) != string(h.store.accountCredentials) {
+		t.Fatal("chat listing did not use stored credentials")
+	}
+	if strings.Contains(response.Body.String(), "private-app-secret") || strings.Contains(response.Body.String(), "credentials") {
+		t.Fatal("chat listing leaked credentials")
+	}
+}
+
+func TestAccountChatListErrorsAndEmptyPage(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, platform string
+		upstream           error
+		status             int
+	}{
+		{name: "missing parameter", platform: "feishu_app", status: http.StatusBadRequest},
+		{name: "invalid id", id: "bad", platform: "feishu_app", status: http.StatusBadRequest},
+		{name: "missing account", id: uuid.NewString(), platform: "feishu_app", status: http.StatusNotFound},
+		{name: "wrong platform", id: routeAccountID, platform: "feishu", status: http.StatusBadRequest},
+		{name: "upstream unavailable", id: routeAccountID, platform: "feishu_app", upstream: domain.ErrUnavailable, status: http.StatusServiceUnavailable},
+		{name: "empty page", id: routeAccountID, platform: "feishu_app", status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newProtocolHarness(t)
+			cookie := protocolLogin(t, h)
+			h.store.accounts[routeAccountID] = domain.Account{ID: routeAccountID, Platform: tc.platform}
+			h.sender.chatErr = tc.upstream
+			response := protocolRequest(h.engine, http.MethodGet, "/api/v1/admin/accounts/chats/list?accountId="+tc.id, "", nil, cookie)
+			envelope := requireProtocolEnvelope(t, response, tc.status)
+			if tc.status == http.StatusOK && string(envelope.Data) != `{"items":[],"hasMore":false,"nextPageToken":""}` {
+				t.Fatalf("unexpected empty page: %s", envelope.Data)
+			}
+		})
+	}
 }
 
 func TestNotifyReturnsReal202AndRoutesCallerFromQuery(t *testing.T) {

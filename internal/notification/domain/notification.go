@@ -42,6 +42,24 @@ type SaveAccount struct {
 	Credentials json.RawMessage `json:"credentials,omitempty"`
 }
 
+// AccountSnapshot is internal: listing an app's chats needs credentials even
+// before the account has any configured targets.
+type AccountSnapshot struct {
+	Account
+	Credentials json.RawMessage `json:"-"`
+}
+
+type Chat struct {
+	ChatID string `json:"chatId"`
+	Name   string `json:"name"`
+}
+
+type ChatPage struct {
+	Items         []Chat `json:"items"`
+	HasMore       bool   `json:"hasMore"`
+	NextPageToken string `json:"nextPageToken"`
+}
+
 type Target struct {
 	ID        string          `json:"id"`
 	AccountID string          `json:"accountId"`
@@ -102,6 +120,7 @@ type Envelope struct {
 
 type Store interface {
 	Account(context.Context, string) (Account, error)
+	AccountSnapshot(context.Context, string) (AccountSnapshot, error)
 	ListAccounts(context.Context) ([]Account, error)
 	SaveAccount(context.Context, SaveAccount) (Account, error)
 	DeleteAccount(context.Context, string) error
@@ -126,4 +145,8 @@ type Sender interface {
 	ValidateAccount(credentials json.RawMessage) error
 	ValidateTarget(config json.RawMessage) error
 	Send(context.Context, TargetSnapshot, Message) error
+}
+
+type ChatLister interface {
+	ListChats(context.Context, json.RawMessage, string) (ChatPage, error)
 }

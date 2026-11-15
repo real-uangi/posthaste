@@ -55,6 +55,44 @@ test("账号API独立保存凭证与开关，出口API只保存账号引用和�
   ]);
 });
 
+test("飞书群列表按保存账号分页读取，编码游标并传递取消信号", async (t) => {
+  const calls: Array<{ input: unknown; init?: RequestInit }> = [];
+  const firstPage = { items: [{ chatId: "oc_first", name: "告警群" }], hasMore: true, nextPageToken: "next+/=&" };
+  const fetch = t.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {
+    calls.push({ input, init });
+    return envelope(200, firstPage);
+  });
+  const controller = new AbortController();
+  assert.deepEqual(await api.accountChats("account-id", undefined, controller.signal), firstPage);
+  assert.equal(calls[0].input, "/api/v1/admin/accounts/chats/list?accountId=account-id");
+  assert.equal(calls[0].init?.method, "GET");
+  assert.equal(calls[0].init?.credentials, "same-origin");
+  assert.equal(calls[0].init?.body, undefined);
+  assert.equal(calls[0].init?.signal, controller.signal);
+  const lastPage = { items: [], hasMore: false, nextPageToken: "" };
+  fetch.mock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+    calls.push({ input, init });
+    return envelope(200, lastPage);
+  });
+  assert.deepEqual(await api.accountChats("account-id", firstPage.nextPageToken), lastPage);
+  const url = new URL(calls[1].input as string, "https://posthaste.example");
+  assert.equal(url.searchParams.get("accountId"), "account-id");
+  assert.equal(url.searchParams.get("pageToken"), firstPage.nextPageToken);
+});
+
+test("飞书群列表拒绝缺失分页契约并保留认证、上游失败与取消语义", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => envelope(200, { items: [], hasMore: true, nextPageToken: "" }));
+  await assert.rejects(api.accountChats("account-id"), /有效的飞书群列表/);
+  fetch.mock.mockImplementation(async () => envelope(200, { items: [{ chatId: "oc_chat" }], hasMore: false, nextPageToken: "" }));
+  await assert.rejects(api.accountChats("account-id"), /有效的飞书群列表/);
+  fetch.mock.mockImplementation(async () => envelope(503, null, "暂时无法读取飞书群"));
+  await assert.rejects(api.accountChats("account-id"), (error: unknown) => error instanceof APIError && error.status === 503);
+  fetch.mock.mockImplementation(async () => envelope(401, null, "会话已过期"));
+  await assert.rejects(api.accountChats("account-id"), (error: unknown) => error instanceof APIError && error.status === 401);
+  fetch.mock.mockImplementation(async () => { throw new DOMException("Aborted", "AbortError"); });
+  await assert.rejects(api.accountChats("account-id"), (error: unknown) => error instanceof DOMException && error.name === "AbortError");
+});
+
 test("父账号停用导致测试503时只报告错误，不自动启用或重试", async (t) => {
   const fetch = t.mock.method(globalThis, "fetch", async () => envelope(503, null, "所属账号已停用"));
   await assert.rejects(api.testTarget({ id: "target-id", message: "测试", format: "text" }), (error: unknown) => {

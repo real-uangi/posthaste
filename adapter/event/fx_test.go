@@ -39,7 +39,7 @@ func TestAcceptedEnvelopeReachesFixedSubscriberAndDrains(t *testing.T) {
 	defer cancel()
 	defer bus.Close(ctx)
 	sender := &captureSender{delivered: make(chan capturedDelivery, 1)}
-	service, err := application.NewService(routeStore{}, infra.NewPublisher(bus), []domain.Sender{sender}, time.Second)
+	service, err := application.NewService(routeStore{}, infra.NewPublisher(bus), []domain.Sender{sender}, nil, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

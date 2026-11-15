@@ -15,6 +15,7 @@ import (
 type storeStub struct {
 	routes       []domain.Route
 	account      domain.Account
+	credentials  json.RawMessage
 	target       domain.TargetSnapshot
 	savedGroup   domain.SaveGroup
 	saved        domain.SaveTarget
@@ -23,7 +24,10 @@ type storeStub struct {
 }
 
 func (s *storeStub) Account(context.Context, string) (domain.Account, error) { return s.account, s.err }
-func (s *storeStub) ListAccounts(context.Context) ([]domain.Account, error)  { return nil, s.err }
+func (s *storeStub) AccountSnapshot(context.Context, string) (domain.AccountSnapshot, error) {
+	return domain.AccountSnapshot{Account: s.account, Credentials: s.credentials}, s.err
+}
+func (s *storeStub) ListAccounts(context.Context) ([]domain.Account, error) { return nil, s.err }
 func (s *storeStub) SaveAccount(_ context.Context, input domain.SaveAccount) (domain.Account, error) {
 	s.savedAccount = input
 	return domain.Account{}, s.err
@@ -81,6 +85,60 @@ func (s *senderStub) Send(ctx context.Context, target domain.TargetSnapshot, msg
 	return s.send(ctx, target, msg)
 }
 
+type chatListerFunc func(context.Context, json.RawMessage, string) (domain.ChatPage, error)
+
+func (f chatListerFunc) ListChats(ctx context.Context, credentials json.RawMessage, pageToken string) (domain.ChatPage, error) {
+	return f(ctx, credentials, pageToken)
+}
+
+func TestAccountChatsUseStoredCredentialsAndAllowDisabledAccounts(t *testing.T) {
+	secret := json.RawMessage(`{"appId":"app","appSecret":"private-secret"}`)
+	store := &storeStub{account: domain.Account{ID: uuid.NewString(), Platform: "feishu_app", Enabled: false}, credentials: secret}
+	called := false
+	lister := chatListerFunc(func(ctx context.Context, credentials json.RawMessage, pageToken string) (domain.ChatPage, error) {
+		called = true
+		if string(credentials) != string(secret) || pageToken != "cursor+/=?" {
+			t.Fatal("stored credentials or opaque cursor lost")
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > time.Second {
+			t.Fatal("chat request has no bounded context")
+		}
+		return domain.ChatPage{Items: []domain.Chat{{ChatID: "oc_one", Name: "group"}}, HasMore: true, NextPageToken: "next"}, nil
+	})
+	service, _ := NewService(store, &publisherStub{}, nil, lister, time.Second)
+	page, err := service.ListAccountChats(context.Background(), store.account.ID, "cursor+/=?")
+	if err != nil || !called || len(page.Items) != 1 || !page.HasMore || page.NextPageToken != "next" {
+		t.Fatalf("page=%+v err=%v called=%t", page, err, called)
+	}
+}
+
+func TestAccountChatsRejectInvalidAccountsAndPropagateFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, platform      string
+		storeErr, listErr, want error
+	}{
+		{name: "invalid id", id: "bad", want: domain.ErrInvalid},
+		{name: "missing account", id: uuid.NewString(), storeErr: domain.ErrNotFound, want: domain.ErrNotFound},
+		{name: "storage failure", id: uuid.NewString(), storeErr: domain.ErrUnavailable, want: domain.ErrUnavailable},
+		{name: "wrong platform", id: uuid.NewString(), platform: "feishu", want: domain.ErrInvalid},
+		{name: "platform failure", id: uuid.NewString(), platform: "feishu_app", listErr: domain.ErrUnavailable, want: domain.ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			lister := chatListerFunc(func(context.Context, json.RawMessage, string) (domain.ChatPage, error) {
+				called = true
+				return domain.ChatPage{}, tc.listErr
+			})
+			service, _ := NewService(&storeStub{account: domain.Account{Platform: tc.platform}, err: tc.storeErr}, &publisherStub{}, nil, lister, time.Second)
+			_, err := service.ListAccountChats(context.Background(), tc.id, "")
+			if !errors.Is(err, tc.want) || called != (tc.listErr != nil) {
+				t.Fatalf("err=%v called=%t", err, called)
+			}
+		})
+	}
+}
+
 func TestCallerSelectionAndEmptyMatchedGroup(t *testing.T) {
 	defaultTarget := domain.TargetSnapshot{ID: uuid.NewString(), Platform: "telegram", Enabled: true}
 	customTarget := domain.TargetSnapshot{ID: uuid.NewString(), Platform: "feishu", Enabled: true}
@@ -102,7 +160,7 @@ func TestCallerSelectionAndEmptyMatchedGroup(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &publisherStub{}
-			service, err := NewService(&storeStub{routes: tc.routes}, publisher, nil, time.Second)
+			service, err := NewService(&storeStub{routes: tc.routes}, publisher, nil, nil, time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +194,7 @@ func TestAcceptedEnvelopeOwnsConfigAndCredentialBuffers(t *testing.T) {
 	other.ID = uuid.NewString()
 	store := &storeStub{routes: []domain.Route{{Caller: "default", Targets: []domain.TargetSnapshot{target, other}}}}
 	publisher := &publisherStub{}
-	service, _ := NewService(store, publisher, nil, time.Second)
+	service, _ := NewService(store, publisher, nil, nil, time.Second)
 	if _, err := service.Submit(context.Background(), "", domain.Message{Message: "body"}); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +225,7 @@ func TestAccountCreationRequiresCredentialsAndUpdateOmissionSkipsValidation(t *t
 		return nil
 	}}
 	store := &storeStub{}
-	service, _ := NewService(store, &publisherStub{}, []domain.Sender{sender}, time.Second)
+	service, _ := NewService(store, &publisherStub{}, []domain.Sender{sender}, nil, time.Second)
 	if _, err := service.SaveAccount(context.Background(), domain.SaveAccount{Name: "bot", Platform: "telegram"}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatal("created account without credentials")
 	}
@@ -194,7 +252,7 @@ func TestTargetRebindingValidatesTheSelectedAccountPlatform(t *testing.T) {
 		return nil
 	}}
 	feishu := &senderStub{platform: "feishu", validateTarget: func(json.RawMessage) error { t.Fatal("wrong account platform used"); return nil }}
-	service, _ := NewService(store, &publisherStub{}, []domain.Sender{telegram, feishu}, time.Second)
+	service, _ := NewService(store, &publisherStub{}, []domain.Sender{telegram, feishu}, nil, time.Second)
 	input := domain.SaveTarget{ID: uuid.NewString(), AccountID: accountID, Name: "exit", Enabled: false, Config: json.RawMessage(`{"chatId":"-2"}`)}
 	if _, err := service.SaveTarget(context.Background(), input); err != nil {
 		t.Fatal(err)
@@ -214,7 +272,7 @@ func TestTargetRebindingValidatesTheSelectedAccountPlatform(t *testing.T) {
 
 func TestPublishFailureDoesNotReturnAcceptance(t *testing.T) {
 	publisher := &publisherStub{err: errors.New("private queue error")}
-	service, _ := NewService(&storeStub{routes: []domain.Route{{Caller: "default", Targets: []domain.TargetSnapshot{{ID: uuid.NewString()}}}}}, publisher, nil, time.Second)
+	service, _ := NewService(&storeStub{routes: []domain.Route{{Caller: "default", Targets: []domain.TargetSnapshot{{ID: uuid.NewString()}}}}}, publisher, nil, nil, time.Second)
 	accepted, err := service.Submit(context.Background(), "", domain.Message{Message: "body"})
 	if !errors.Is(err, domain.ErrUnavailable) || accepted.MessageID != "" || len(publisher.envelopes) != 1 {
 		t.Fatalf("accepted=%v, err=%v", accepted, err)
@@ -236,7 +294,7 @@ func TestDeliverContinuesAfterFailureWithIndependentTimeouts(t *testing.T) {
 		}
 		return nil
 	}}
-	service, _ := NewService(&storeStub{}, &publisherStub{}, []domain.Sender{sender}, time.Second)
+	service, _ := NewService(&storeStub{}, &publisherStub{}, []domain.Sender{sender}, nil, time.Second)
 	err := service.Deliver(domain.Envelope{MessageID: uuid.NewString(), Targets: []domain.TargetSnapshot{{ID: "first", Platform: "fake"}, {ID: "second", Platform: "fake"}}})
 	if !errors.Is(err, domain.ErrUnavailable) || len(attempted) != 2 || attempted[1] != "second" {
 		t.Fatalf("attempts=%v err=%v", attempted, err)
@@ -246,7 +304,7 @@ func TestDeliverContinuesAfterFailureWithIndependentTimeouts(t *testing.T) {
 func TestDisabledTestTargetIsNotPublished(t *testing.T) {
 	id := uuid.NewString()
 	publisher := &publisherStub{}
-	service, _ := NewService(&storeStub{target: domain.TargetSnapshot{ID: id, Enabled: false}}, publisher, nil, time.Second)
+	service, _ := NewService(&storeStub{target: domain.TargetSnapshot{ID: id, Enabled: false}}, publisher, nil, nil, time.Second)
 	_, err := service.Test(context.Background(), id, domain.Message{Message: "test"})
 	if !errors.Is(err, domain.ErrUnavailable) || len(publisher.envelopes) != 0 {
 		t.Fatal("disabled target entered queue")
@@ -256,7 +314,7 @@ func TestDisabledTestTargetIsNotPublished(t *testing.T) {
 func TestSavePreservesFalseOmittedCredentialsAndEmptyMembers(t *testing.T) {
 	store := &storeStub{}
 	sender := &senderStub{platform: "fake"}
-	service, _ := NewService(store, &publisherStub{}, []domain.Sender{sender}, time.Second)
+	service, _ := NewService(store, &publisherStub{}, []domain.Sender{sender}, nil, time.Second)
 	_, err := service.SaveAccount(context.Background(), domain.SaveAccount{ID: uuid.NewString(), Name: "account", Platform: "fake", Enabled: false})
 	if err != nil || store.savedAccount.Enabled || store.savedAccount.Credentials != nil {
 		t.Fatalf("save changed omitted credentials/false: %v", err)
@@ -273,13 +331,13 @@ func TestSavePreservesFalseOmittedCredentialsAndEmptyMembers(t *testing.T) {
 }
 
 func TestInvalidMessageAndDuplicatePlatform(t *testing.T) {
-	service, _ := NewService(&storeStub{}, &publisherStub{}, nil, time.Second)
+	service, _ := NewService(&storeStub{}, &publisherStub{}, nil, nil, time.Second)
 	for _, msg := range []domain.Message{{Message: " "}, {Message: "body", Format: "html"}} {
 		if _, err := service.Submit(context.Background(), "", msg); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("invalid message accepted: %v", err)
 		}
 	}
-	_, err := NewService(&storeStub{}, &publisherStub{}, []domain.Sender{&senderStub{platform: "same"}, &senderStub{platform: "same"}}, time.Second)
+	_, err := NewService(&storeStub{}, &publisherStub{}, []domain.Sender{&senderStub{platform: "same"}, &senderStub{platform: "same"}}, nil, time.Second)
 	if err == nil {
 		t.Fatal("duplicate platform did not fail construction")
 	}

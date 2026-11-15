@@ -11,6 +11,7 @@ const telegram: Account = {
   credentialsConfigured: true,
 };
 const feishu: Account = { ...telegram, id: "feishu-account", platform: "feishu" };
+const feishuApp: Account = { ...telegram, id: "feishu-app-account", platform: "feishu_app" };
 const target: Target = {
   id: "target-id",
   name: "运维群",
@@ -51,6 +52,30 @@ test("创建飞书账号提交Webhook凭证，不再把凭证放到出口配置"
     platform: "feishu",
     enabled: true,
     credentials: { webhookUrl: draft.webhookUrl },
+  });
+});
+
+test("飞书应用账号创建与整体更换凭证，编辑默认保留且平台不变", () => {
+  const draft = accountDraft();
+  draft.platform = "feishu_app";
+  draft.name = "飞书应用";
+  draft.appId = " cli_example ";
+  draft.appSecret = " app-secret ";
+  draft.botToken = "旧平台凭证";
+  assert.deepEqual(buildAccountInput(draft), {
+    name: "飞书应用", platform: "feishu_app", enabled: true,
+    credentials: { appId: "cli_example", appSecret: "app-secret" },
+  });
+  const edited = accountDraft(feishuApp);
+  edited.enabled = false;
+  assert.equal(Object.hasOwn(buildAccountInput(edited, feishuApp), "credentials"), false);
+  edited.replaceCredentials = true;
+  edited.appId = "cli_replacement";
+  edited.appSecret = "replacement-secret";
+  edited.platform = "telegram";
+  assert.deepEqual(buildAccountInput(edited, feishuApp), {
+    id: feishuApp.id, name: feishuApp.name, platform: "feishu_app", enabled: false,
+    credentials: { appId: "cli_replacement", appSecret: "replacement-secret" },
   });
 });
 
@@ -108,6 +133,21 @@ test("飞书Webhook一账号一出口，停用出口也占位，编辑自身不�
   assert.equal(feishuAccountOccupied(feishu, [child]), true);
   assert.equal(feishuAccountOccupied(feishu, [child], child.id), false);
   assert.equal(feishuAccountOccupied(telegram, [target]), false);
+  assert.equal(feishuAccountOccupied(feishuApp, [{ ...child, accountId: feishuApp.id }]), false);
+});
+
+test("飞书应用出口只保存所选群，改绑不携带旧话题且空选择不能保存", () => {
+  const draft = targetDraft(target);
+  draft.accountId = feishuApp.id;
+  draft.chatId = "oc_selected";
+  draft.enabled = false;
+  assert.deepEqual(buildTargetInput(draft, feishuApp, target), {
+    id: target.id, name: target.name, accountId: feishuApp.id, enabled: false,
+    config: { chatId: "oc_selected" },
+  });
+  draft.chatId = "";
+  assert.throws(() => buildTargetInput(draft, feishuApp), /请选择飞书/);
+  assert.deepEqual(buildTargetInput(draft, feishu, target).config, {});
 });
 
 test("空路由组显式提交空列表，caller原样保留，成员去重", () => {

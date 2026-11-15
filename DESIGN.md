@@ -67,6 +67,8 @@ notification 定义配置存储端口、消息发布端口和 `Sender` 端口。
 
 `Sender` 以平台类型提供 `ValidateAccount(credentials)`、`ValidateTarget(config)` 和 `Send(ctx, targetSnapshot, message) error`。通过 fx value group `notification_senders` 收集后，构造按平台类型查找的索引；不依赖 group 顺序，重复类型启动失败。账号写入校验新凭证，出口写入根据所选账号的平台校验群组配置；发送时仅解码可信快照和处理外部平台响应，不逐层重复校验。
 
+飞书应用机器人的群选择使用独立只读 `ChatLister` 端口，由同一个 infra 应用机器人实现提供，不扩大 `Sender` 或建立通用发现框架。应用用例通过存储端口读取内部账号快照及凭证，确认账号平台后调用群列表端口；公开账号读取仍不返回凭证。管理 HTTP 只把账号 ID 和分页游标传入用例，不直接访问数据库或平台 API。
+
 auth 通过口令验证与会话存储端口实现登录等用例。notification 与 auth 之间没有业务调用；HTTP 适配器先完成管理员会话认证，再调用配置用例。
 
 根入口使用 `app.Current().Option(...).Run()`，装配 `common.Module`、`db.Module`、shared、两个业务域、事件适配器、HTTP 适配器和 web。新增模块必须检查构造依赖与注册是否完整，不能仅依靠模块的书写顺序假设启动/停止顺序。
@@ -79,7 +81,7 @@ auth 通过口令验证与会话存储端口实现登录等用例。notification
 
 | 模型 | 必要字段 | 约束 |
 | --- | --- | --- |
-| Account | id、name、platform、enabled、credentialsCiphertext、创建/更新时间 | platform 为 feishu/telegram，创建后不修改 |
+| Account | id、name、platform、enabled、credentialsCiphertext、创建/更新时间 | platform 为 feishu/feishu_app/telegram，创建后不修改 |
 | Target | id、name、accountId、enabled、config、创建/更新时间 | 一个出口属于一个账号，不再持有平台或凭证 |
 | TargetGroup | id、name、caller、创建/更新时间 | UI 称“路由组”；caller 唯一，保留 default |
 | GroupTarget | groupId、targetId | 组合唯一，引用真实组和目标 |
@@ -93,11 +95,12 @@ auth 通过口令验证与会话存储端口实现登录等用例。notification
 | 账号平台 | 出口公开 config | 账号仅写 credentials |
 | --- | --- | --- |
 | feishu（群 Webhook） | `{}`，每个账号只能一个固定群出口 | webhookUrl、可选 signingSecret |
+| feishu_app（企业自建应用机器人） | chatId（string），每个账号可配置多个群出口 | appId、appSecret |
 | telegram | chatId（string）、可选 messageThreadId（正整数） | botToken |
 
 账号读取只返回 `credentialsConfigured`，不返回密文、明文或凭证掩码。创建账号时凭证必需；更新账号省略整个 credentials 时保留原值，提供时整体替换，不作字段合并。同一账号多个出口共用一份凭证，更新账号即可影响它们的后续受理。出口接口只保存 accountId 和 config，不再接受平台或凭证。
 
-账号平台创建后不可修改；出口可以更换 accountId，并按新账号平台提交完整 config。为确保 Webhook 单出口约束，存储写出口时锁定所选账号，再排除当前出口计数；禁用出口也占名额，第二个返回 409。TG 不设置单出口限制。false、空列表和凭证省略都必须显式处理，不能由 ORM 零值更新规则忽略。
+账号平台创建后不可修改；出口可以更换 accountId，并按新账号平台提交完整 config。为确保 Webhook 单出口约束，存储写出口时锁定所选账号，再排除当前出口计数；禁用出口也占名额，第二个返回 409。TG 和飞书应用机器人不设置单出口限制。false、空列表和凭证省略都必须显式处理，不能由 ORM 零值更新规则忽略。
 
 账号停用只影响后续受理，不改写子出口的 enabled。有效出口需同时满足账号和出口启用；恢复账号后，原本启用的出口重新可用。入队快照包含账号 ID、平台、凭证和目的地配置，账号凭证或启停变化不会追溯修改既有快照。
 
@@ -165,6 +168,7 @@ eventbus 按运行时函数名识别订阅者，同 topic 的同源闭包/同名
 | 平台 | text | markdown |
 | --- | --- | --- |
 | 飞书自定义机器人 | text 消息，标题与正文以空行连接 | interactive 卡片 schema 2.0，纯文本标题与 Markdown 正文组件 |
+| 飞书企业自建应用机器人 | 消息 API 的 text，标题与正文以空行连接 | 消息 API 的 interactive，复用卡片 schema 2.0 与 Markdown 正文组件 |
 | Telegram 官方 Bot API | sendMessage，不设置 parse_mode，标题与正文以空行连接 | sendRichMessage，rich_message.markdown；拼接标题时转义其 Markdown 元字符 |
 
 共同基础语法为 `**粗体**`、`*斜体*`、HTTP(S) 链接、行内/围栏代码、列表和引用。正文由对应平台原生解析，不承诺平台扩展语法或复杂嵌套完全一致；首版不提供原生卡片、附件和按钮载荷接口，也不引入 Markdown 转换依赖。
@@ -173,13 +177,21 @@ Sender 使用明确超时的 HTTP client，检查 HTTP 状态和平台业务结�
 
 飞书凭证在写入时校验官方 HTTPS webhook 地址与路径；设置 signingSecret 时按官方签名规则发送。Telegram 使用固定官方 API 地址，不接受由消息指定的 API Host。平台 raw error、含 token 的 URL 及上游响应正文不能进入日志或返回到 eventbus。
 
-当前飞书类型是固定群 Webhook，不能通过新增 chatId 跨群。后续飞书应用机器人将作为独立平台 Sender 接入：账号保存应用身份和凭证，出口保存 chatId；本次不实现应用 API、访问令牌管理或群自动发现。
+`feishu` 保持固定群 Webhook；`feishu_app` 是独立 Sender，仅支持国内飞书企业自建应用，不接入商店应用、多租户授权、用户登录、事件订阅或自动加群。账号仅写凭证为 `{appId,appSecret}`，出口为 `{chatId}`，不接收 Webhook 签名密钥、用户 ID 或 TG 话题参数。账号保存只校验配置形状，不隐式向飞书认证。
+
+应用机器人按需调用 `POST https://accounts.feishu.cn/oauth/v3/token`，以 `grant_type=client_credentials`、`client_id=appId`、`client_secret=appSecret` 获取 `access_token` 和 `expires_in`；此 access_token 即 tenant_access_token，不依赖旧版凭证长度或旧接口字段。Token 仅在进程内缓存，按凭证版本隔离，提前 60 秒失效；凭证变更后的新快照不能借用旧凭证的缓存。缓存并发安全且清理过期条目，不启动刷新任务、不写数据库或日志。Token 获取与发送共用每个目标的发送超时预算；群列表也受同一配置的单次操作预算限制。Token 无效时只失效对应缓存，不在当次请求刷新重发。
+
+发送使用 `POST https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id`，Bearer 为 tenant_access_token，`receive_id` 为出口 chatId。`content` 是文本对象或卡片对象序列化后的 JSON 字符串，不能使用 Webhook 的外层 card 形状。检查 HTTP 状态和业务 code；认证、权限、限流和内容错误都仅使本次目标失败，继续其他目标。
+
+群选择通过 `GET https://open.feishu.cn/open-apis/im/v1/chats` 获取机器人已加入的群，固定 `page_size=100`、`sort_type=ByCreateTimeAsc`，按平台返回游标逐页读取，不自动遍历全部群。只返回群名与 chatId，不持久化群列表；群列表不是目标成员有效性的永久证明，保存出口不为此增加一次远程校验。应用需开通 `im:chat:read` 和 `im:message:send_as_bot` 应用身份权限，启用机器人能力并发布、启用应用；机器人须加入目标群且有发言权限。本扩展无数据库迁移或新环境变量，消息入口和 Go SDK 协议保持不变。
 
 新增平台只增加对应 infra Sender、fx 注册、账号/出口校验与后台表单，并补充契约和测试；不修改 caller 路由和通用投递循环。新增原生告警入口时，在 adapter 中转换为同一接收命令；没有第二种协议需求前，不增加通用解析器注册框架。
 
 ## 7. 后台、认证与凭证
 
 后台提供登录、账号列表/编辑、账号下的群组出口、路由组、默认路由组配置及出口测试。只有管理员一种身份，无用户表、角色权限、注册、配额或计费。出口编辑选择账号，只填写目的地；凭证统一在账号中维护。测试操作显示“已入队，请在目标平台确认”，不展示虚构投递记录。管理接口和安全错误状态以 API 文档为准。
+
+飞书应用账号先保存 App ID 和 App Secret，再在出口表单从群名与 chatId 列表选择群，支持刷新及加载更多。切换账号清除原群选择并取消旧请求；空列表和加载失败明确提示，不显示为发送成功。编辑已有出口时保留其当前 chatId，即使尚未在当前分页出现，也可修改名称或开关；新建或更换群从加载的选项选择。管理群列表接口使用 Cookie 会话并返回 `Cache-Control: no-store`，停用账号仍可读取群列表用于配置，停用不因此获得投递资格。
 
 后台使用环境口令；验证实现避免将原始口令写入持久化、日志或错误，比较使用固定长度摘要的常量时间比较。登录生成高熵随机 opaque session ID，服务端仅在内存中保存其摘要和到期时间；固定 12 小时到期，不滑动续期。过期会话在访问或登录清理时移除，不创建常驻清理任务。退出撤销会话，重启清空会话。
 
@@ -262,4 +274,5 @@ SDK 标签不触发此工作流。为防 GoReleaser 从 `sdk/go/*` 误选 prior 
 - [eventbus 契约](https://github.com/real-uangi/eventbus/blob/7eee93697032364d93e50e57bc6b16890c8b1e39/README.md)：内存、并发、发布、订阅身份和 Close 边界。
 - [Beszel Generic](https://beszel.dev/guide/notifications/generic)：JSON title/message、自定义请求头与 query 转发。
 - [飞书卡片与自定义机器人](https://open.feishu.cn/document/feishu-cards/quick-start/send-message-cards-with-custom-bot)、[Telegram Rich Message](https://core.telegram.org/bots/api#rich-message-formatting-options)：平台 Markdown 映射，核对日期 2026-11-15。
+- [飞书自建应用 tenant_access_token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/tenant_access_token)、[消息内容结构](https://open.feishu.cn/document/server-docs/im-v1/message-content-description/create_json?lang=zh-CN)、[官方群列表说明](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)：应用身份认证、卡片 JSON 字符串和群列表权限/分页，核对日期 2026-11-15。
 - [Go Modules 版本规则](https://go.dev/ref/mod#vcs-version)：独立子模块的模块路径和标签前缀。

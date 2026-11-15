@@ -16,6 +16,8 @@ export interface AccountDraft {
   webhookUrl: string;
   signingSecret: string;
   botToken: string;
+  appId: string;
+  appSecret: string;
 }
 
 export function accountDraft(account?: Account): AccountDraft {
@@ -27,6 +29,8 @@ export function accountDraft(account?: Account): AccountDraft {
     webhookUrl: "",
     signingSecret: "",
     botToken: "",
+    appId: "",
+    appSecret: "",
   };
 }
 
@@ -44,15 +48,16 @@ export function buildAccountInput(
 
   // 更新未选择更换凭证时必须省略字段，不能用空对象覆盖已存凭证。
   if (!account || draft.replaceCredentials) {
-    input.credentials =
-      platform === "feishu"
-        ? {
-            webhookUrl: draft.webhookUrl.trim(),
-            ...(draft.signingSecret
-              ? { signingSecret: draft.signingSecret }
-              : {}),
-          }
-        : { botToken: draft.botToken.trim() };
+    if (platform === "feishu") {
+      input.credentials = {
+        webhookUrl: draft.webhookUrl.trim(),
+        ...(draft.signingSecret ? { signingSecret: draft.signingSecret } : {}),
+      };
+    } else if (platform === "feishu_app") {
+      input.credentials = { appId: draft.appId.trim(), appSecret: draft.appSecret.trim() };
+    } else {
+      input.credentials = { botToken: draft.botToken.trim() };
+    }
   }
   return input;
 }
@@ -89,7 +94,10 @@ export function buildTargetInput(
     config: {},
   };
   // 出口可更换账号，配置必须按新账号的平台构造，不能沿用旧平台载荷。
-  if (account.platform === "telegram") {
+  if (account.platform === "feishu_app") {
+    if (!draft.chatId) throw new Error("请选择飞书机器人已加入的群。");
+    input.config.chatId = draft.chatId;
+  } else if (account.platform === "telegram") {
     input.config.chatId = draft.chatId.trim();
     if (draft.messageThreadId !== "") {
       const value = Number(draft.messageThreadId);

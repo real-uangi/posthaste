@@ -18,7 +18,8 @@ Posthaste 是面向内部业务系统的自托管消息／告警推送中心：�
 - 内部单租户、单实例运行，一个 Go 服务与同源管理后台。
 - 统一 `POST /api/v1/notify`，接收 title/message，支持 text 和 Markdown。
 - caller 选择目标组；缺省或未知 caller 使用默认组，命中空组则明确拒绝。
-- 独立平台账号统一维护凭证，账号下配置群组/话题出口；TG 账号可有多个出口，飞书群 Webhook 账号对应一个固定群出口。
+- 独立平台账号统一维护凭证，账号下配置群组/话题出口；TG 和飞书企业自建应用账号可有多个出口，飞书群 Webhook 账号对应一个固定群出口。
+- 飞书应用机器人使用 App ID / App Secret，后台从机器人已加入的群列表选择出口，支持刷新和分页加载。
 - caller 路由组可绑定不同账号下的多个出口。后台提供账号、群组出口、路由组和默认组管理，以单管理员口令登录；出口测试复用正常异步链路。
 - 独立 Go SDK，方便其他 Go 服务发送消息，与 HTTP v1 保持同一协议。
 
@@ -37,7 +38,7 @@ Posthaste 是面向内部业务系统的自托管消息／告警推送中心：�
 
 后端使用 allingo + fx + DDD，划分 notification、auth 两个域，每域按 application/domain/infra 分层。PostgreSQL 只保存账号、出口、路由组及成员配置，凭证以账号为单位加密保存；不装配 Redis、消息中间件、对象存储或定时任务。
 
-一个账号更新 Token 后，其所有出口的后续消息使用新凭证；停用账号会停用其全部出口的受理，但不改写出口自身开关。caller 路由和 Go SDK 不需要知道账号凭证。飞书应用机器人（应用身份加多个 chatId）留待后续接入，当前飞书类型仍为群 Webhook。
+一个账号更新凭证后，其所有出口的后续消息使用新凭证；停用账号会停用其全部出口的受理，但不改写出口自身开关。caller 路由和 Go SDK 不需要知道账号凭证。飞书保留群 Webhook（`feishu`）并提供独立企业自建应用机器人（`feishu_app`），应用账号以多个 chatId 出口向不同群推送。
 
 后台采用 React、TypeScript、Vite、Tailwind CSS 和 pnpm，构建产物嵌入 Go。Go SDK 位于 [sdk/go](sdk/go/README.md) 独立模块，仅依赖标准库，不将 allingo 或数据库依赖带入调用方项目。
 
@@ -122,6 +123,18 @@ docker run --rm --name posthaste --env-file .env -p 8080:8080 ghcr.io/real-uangi
 
 账号拆分属于未发布首版的配置 schema 调整；旧目标数据不能仅靠 AutoMigrate 自动变成账号和出口，旧密文也不能直接改用账号 ID 解密。已有旧配置库时，应按 [系统设计](DESIGN.md) 显式迁移，不启动自动回填或清库逻辑。
 
+### 飞书应用机器人配置
+
+1. 在飞书开发者后台创建**企业自建应用**，添加机器人能力，取得 App ID 和 App Secret。
+2. 为应用开通应用身份权限 `im:chat:read`（查看群信息）和 `im:message:send_as_bot`（以应用身份发消息），发布版本并由企业管理员启用。把机器人加入目标群，并确保机器人有发言权限。
+3. 在 Posthaste 后台添加“飞书应用机器人”账号，填写 App ID 和 App Secret 并保存。凭证仅写，不回显；编辑时省略凭证保留原值，更换时填写完整的一对。
+4. 在账号下添加群组出口，从列表选择群。每次加载最多 100 个群，可加载更多或刷新；找不到群时先确认机器人已加入、权限和版本已生效。停用账号仍可配置群列表，但不能受理投递。
+5. 将出口绑定默认或 caller 路由组，使用出口测试发送。反馈“已入队”后，在飞书实际确认收到文本及 Markdown 卡片。
+
+本接入仅面向国内飞书企业自建应用，不需要用户授权、事件回调或长连接。群列表只用于选择出口，不自动加群；不支持商店应用或 Lark。群 Webhook 继续使用原平台和单出口配置。无需新增环境变量或数据库迁移，HTTP 消息入口及 Go SDK 调用方式不变。
+
+服务端通过 [飞书自建应用 OAuth 接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/tenant_access_token) 按需获取 tenant_access_token，仅在进程内按凭证版本缓存并提前 60 秒失效，不启动后台刷新或自动重试。应用群列表和消息调用需要允许访问 `accounts.feishu.cn` 及 `open.feishu.cn`；权限和分页依据见 [飞书官方群列表说明](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)。账号保存成功仅表示配置已保存，不代表飞书认证通过。
+
 入口 Token、后台口令和凭证主密钥互相独立。不要提交 `.env`；示例文件不会自动创建数据库、生成真实凭证或启动服务。程序需要访问真实依赖，以上部署步骤未作为本地单测执行。
 
 ## 验证范围与后续维护
@@ -129,5 +142,7 @@ docker run --rm --name posthaste --env-file .env -p 8080:8080 ghcr.io/real-uangi
 实现按基础装配与配置 → 配置存储及认证 → 消息链路和平台 Sender → HTTP/Go SDK → 后台与静态资源嵌入组织。后续变更继续以 [系统设计](DESIGN.md) 和 [工程规范](AGENTS.md) 为准。
 
 默认验证使用静态检查、编译、纯单元测试、HTTP recorder、模拟存储及 RoundTripper；存储测试使用无 socket 的 SQL 驱动验证查询、事务与模型声明，不连接 PostgreSQL。真实 PostgreSQL 的迁移、并发行为，浏览器交互和平台实际接收结果仍需另行验收，不以模拟测试替代。
+
+飞书应用机器人的真实凭证获取、权限生效、群列表分页、浏览器选择交互及文本/Markdown 实际接收仍待真实环境验收。文档和模拟协议检查不代表这些项目已通过。
 
 服务端和 SDK 独立检查；根 `go test ./...` 不覆盖嵌套 SDK 模块。SDK 发布使用 `sdk/go/vX.Y.Z` 标签，不与根服务版本绑定。发布、部署和推送须按单独授权执行。

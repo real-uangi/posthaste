@@ -74,6 +74,18 @@ func (s *Store) Account(ctx context.Context, id string) (domain.Account, error) 
 	return publicAccount(record), nil
 }
 
+func (s *Store) AccountSnapshot(ctx context.Context, id string) (domain.AccountSnapshot, error) {
+	var record accountRecord
+	if err := s.db.WithContext(ctx).First(&record, "id = ?", id).Error; err != nil {
+		return domain.AccountSnapshot{}, storageError(err)
+	}
+	credentials, err := s.cipher.Decrypt(record.ID, record.CredentialsCiphertext)
+	if err != nil {
+		return domain.AccountSnapshot{}, domain.ErrUnavailable
+	}
+	return domain.AccountSnapshot{Account: publicAccount(record), Credentials: credentials}, nil
+}
+
 func (s *Store) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	var records []accountRecord
 	if err := s.db.WithContext(ctx).Order("created_at, id").Find(&records).Error; err != nil {

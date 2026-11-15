@@ -1,8 +1,9 @@
-export type Platform = "feishu" | "telegram";
+export type Platform = "feishu" | "feishu_app" | "telegram";
 export type Format = "text" | "markdown";
 
 export const platformLabels: Record<Platform, string> = {
   feishu: "飞书群Webhook",
+  feishu_app: "飞书应用机器人",
   telegram: "Telegram Bot",
 };
 
@@ -23,7 +24,20 @@ export interface AccountInput {
     webhookUrl?: string;
     signingSecret?: string;
     botToken?: string;
+    appId?: string;
+    appSecret?: string;
   };
+}
+
+export interface AccountChat {
+  chatId: string;
+  name: string;
+}
+
+export interface AccountChatPage {
+  items: AccountChat[];
+  hasMore: boolean;
+  nextPageToken: string;
 }
 
 export interface TargetConfig {

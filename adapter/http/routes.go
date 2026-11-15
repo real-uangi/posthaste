@@ -108,6 +108,13 @@ func Register(engine *gin.Engine, cfg *config.Config, auth *authapp.Service, not
 		}
 		reply(c, http.StatusOK, gin.H{"items": items}, err)
 	})
+	admin.GET("/accounts/chats/list", func(c *gin.Context) {
+		page, err := notifications.ListAccountChats(c.Request.Context(), c.Query("accountId"), c.Query("pageToken"))
+		if page.Items == nil {
+			page.Items = []domain.Chat{}
+		}
+		reply(c, http.StatusOK, page, err)
+	})
 	admin.POST("/accounts/save", func(c *gin.Context) {
 		var input struct {
 			ID          string          `json:"id"`

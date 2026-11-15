@@ -1,6 +1,7 @@
 import type {
   Acceptance,
   Account,
+  AccountChatPage,
   AccountInput,
   GroupInput,
   Session,
@@ -97,6 +98,20 @@ export const api = {
   },
   saveAccount: (account: AccountInput) =>
     request<Account>("/accounts/save", "POST", account),
+  accountChats: async (accountId: string, pageToken?: string, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ accountId });
+    if (pageToken) query.set("pageToken", pageToken);
+    const value = await request<AccountChatPage>(`/accounts/chats/list?${query}`, "GET", undefined, signal);
+    if (
+      !value || !Array.isArray(value.items) ||
+      value.items.some((item) => !item || typeof item.chatId !== "string" || !item.chatId || typeof item.name !== "string") ||
+      typeof value.hasMore !== "boolean" || typeof value.nextPageToken !== "string" ||
+      (value.hasMore && !value.nextPageToken)
+    ) {
+      throw new Error("服务未返回有效的飞书群列表，请重新加载。");
+    }
+    return value;
+  },
   deleteAccount: (id: string) =>
     request<null>("/accounts/delete", "POST", { id }),
   targets: async (signal?: AbortSignal) => {

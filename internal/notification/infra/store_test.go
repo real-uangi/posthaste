@@ -250,24 +250,66 @@ func TestTargetCanRebindWithoutMutatingAccountCredentials(t *testing.T) {
 	}
 }
 
-func TestTelegramAccountAllowsSeveralExits(t *testing.T) {
-	accountID := uuid.NewString()
-	var steps []sqlStep
-	for range 2 {
-		steps = append(steps,
-			sqlStep{contains: []string{`FROM "notification_accounts"`, "FOR UPDATE"}, columns: []string{"id", "platform"}, rows: [][]driver.Value{{accountID, "telegram"}}},
-			sqlStep{contains: []string{`INSERT INTO "notification_targets"`}},
-		)
+func TestAppAccountsAllowSeveralExits(t *testing.T) {
+	for _, platform := range []string{"telegram", "feishu_app"} {
+		t.Run(platform, func(t *testing.T) {
+			accountID := uuid.NewString()
+			var steps []sqlStep
+			for range 2 {
+				steps = append(steps,
+					sqlStep{contains: []string{`FROM "notification_accounts"`, "FOR UPDATE"}, columns: []string{"id", "platform"}, rows: [][]driver.Value{{accountID, platform}}},
+					sqlStep{contains: []string{`INSERT INTO "notification_targets"`}},
+				)
+			}
+			store, script := testStore(t, steps...)
+			for _, chatID := range []string{"one", "two"} {
+				target, err := store.SaveTarget(context.Background(), domain.SaveTarget{AccountID: accountID, Name: "exit", Enabled: true, Config: json.RawMessage(`{"chatId":"` + chatID + `"}`)})
+				if err != nil || target.AccountID != accountID {
+					t.Fatalf("shared bot failed: %v", err)
+				}
+			}
+			if script.commits != 2 {
+				t.Fatalf("commits = %d", script.commits)
+			}
+		})
 	}
-	store, script := testStore(t, steps...)
-	for _, chatID := range []string{"-1", "-2"} {
-		target, err := store.SaveTarget(context.Background(), domain.SaveTarget{AccountID: accountID, Name: "exit", Enabled: true, Config: json.RawMessage(`{"chatId":"` + chatID + `"}`)})
-		if err != nil || target.AccountID != accountID {
-			t.Fatalf("shared bot failed: %v", err)
-		}
+}
+
+func TestAccountSnapshotDecryptsOneReadAndDoesNotSerializeCredentials(t *testing.T) {
+	id := uuid.NewString()
+	store, script := testStore(t, sqlStep{contains: []string{`FROM "notification_accounts"`}, columns: []string{"id", "platform", "enabled", "credentials_ciphertext"}})
+	secret := json.RawMessage(`{"appId":"app","appSecret":"private-app-secret"}`)
+	encrypted, err := store.cipher.Encrypt(id, secret)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if script.commits != 2 {
-		t.Fatalf("commits = %d", script.commits)
+	script.steps[0].rows = [][]driver.Value{{id, "feishu_app", false, encrypted}}
+	snapshot, err := store.AccountSnapshot(context.Background(), id)
+	if err != nil || snapshot.ID != id || snapshot.Platform != "feishu_app" || snapshot.Enabled || string(snapshot.Credentials) != string(secret) {
+		t.Fatal("account snapshot lost its stored identity or credentials")
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil || strings.Contains(string(encoded), "appSecret") || strings.Contains(string(encoded), "private-app-secret") {
+		t.Fatal("account snapshot serialized credentials")
+	}
+}
+
+func TestAccountSnapshotMapsMissingOrUnreadableCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows [][]driver.Value
+		want error
+	}{
+		{name: "missing", want: domain.ErrNotFound},
+		{name: "invalid ciphertext", rows: [][]driver.Value{{uuid.NewString(), []byte("invalid-private-secret")}}, want: domain.ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := testStore(t, sqlStep{contains: []string{`FROM "notification_accounts"`}, columns: []string{"id", "credentials_ciphertext"}, rows: tc.rows})
+			_, err := store.AccountSnapshot(context.Background(), uuid.NewString())
+			if !errors.Is(err, tc.want) || strings.Contains(err.Error(), "private-secret") {
+				t.Fatalf("unsafe or wrong error: %v", err)
+			}
+		})
 	}
 }
 

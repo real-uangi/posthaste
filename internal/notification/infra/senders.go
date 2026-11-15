@@ -66,19 +66,12 @@ func (s *FeishuSender) Send(ctx context.Context, target domain.TargetSnapshot, m
 	if err := json.Unmarshal(target.Credentials, &secret); err != nil {
 		return domain.ErrUnavailable
 	}
-	payload := map[string]any{}
-	if msg.Format == "markdown" {
-		card := map[string]any{
-			"schema": "2.0",
-			"body":   map[string]any{"elements": []any{map[string]any{"tag": "markdown", "content": msg.Message}}},
-		}
-		if msg.Title != "" {
-			card["header"] = map[string]any{"title": map[string]any{"tag": "plain_text", "content": msg.Title}}
-		}
-		payload["msg_type"], payload["card"] = "interactive", card
+	messageType, content := feishuMessage(msg)
+	payload := map[string]any{"msg_type": messageType}
+	if messageType == "interactive" {
+		payload["card"] = content
 	} else {
-		payload["msg_type"] = "text"
-		payload["content"] = map[string]string{"text": plainMessage(msg)}
+		payload["content"] = content
 	}
 	if secret.SigningSecret != "" {
 		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
@@ -189,6 +182,20 @@ func plainMessage(msg domain.Message) string {
 	return msg.Title + "\n\n" + msg.Message
 }
 
+func feishuMessage(msg domain.Message) (string, any) {
+	if msg.Format != "markdown" {
+		return "text", map[string]string{"text": plainMessage(msg)}
+	}
+	card := map[string]any{
+		"schema": "2.0",
+		"body":   map[string]any{"elements": []any{map[string]any{"tag": "markdown", "content": msg.Message}}},
+	}
+	if msg.Title != "" {
+		card["header"] = map[string]any{"title": map[string]any{"tag": "plain_text", "content": msg.Title}}
+	}
+	return "interactive", card
+}
+
 func platformClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
@@ -200,33 +207,48 @@ func decodePlatformJSON(raw json.RawMessage, value any) error {
 }
 
 func postJSON(ctx context.Context, client *http.Client, endpoint string, payload, response any) error {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return domain.ErrUnavailable
+	_, err := platformJSON(ctx, client, http.MethodPost, endpoint, "", payload, response)
+	return err
+}
+
+func platformJSON(ctx context.Context, client *http.Client, method, endpoint, bearer string, payload, response any) (int, error) {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return 0, domain.ErrUnavailable
+		}
+		body = bytes.NewReader(encoded)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
-		return domain.ErrUnavailable
+		return 0, domain.ErrUnavailable
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		// net/http errors include the full request URL, including bot tokens.
 		// Do not wrap that error or let it reach the bus's automatic error log.
-		return fmt.Errorf("%w: platform_network_error", domain.ErrUnavailable)
+		return 0, fmt.Errorf("%w: platform_network_error", domain.ErrUnavailable)
 	}
 	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("%w: platform_http_status_%d", domain.ErrUnavailable, res.StatusCode)
-	}
 	decoder := json.NewDecoder(res.Body)
-	if err := decoder.Decode(response); err != nil {
-		return fmt.Errorf("%w: platform_response_invalid", domain.ErrUnavailable)
+	validJSON := decoder.Decode(response) == nil
+	if validJSON {
+		validJSON = decoder.Decode(&struct{}{}) == io.EOF
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: platform_response_invalid", domain.ErrUnavailable)
+	// Decode business codes even on HTTP errors so an application sender can
+	// discard an explicitly rejected token. The HTTP status still means failure.
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return res.StatusCode, fmt.Errorf("%w: platform_http_status_%d", domain.ErrUnavailable, res.StatusCode)
 	}
-	return nil
+	if !validJSON {
+		return res.StatusCode, fmt.Errorf("%w: platform_response_invalid", domain.ErrUnavailable)
+	}
+	return res.StatusCode, nil
 }
 
 var _ domain.Sender = (*FeishuSender)(nil)

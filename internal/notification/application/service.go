@@ -17,11 +17,12 @@ type Service struct {
 	store       domain.Store
 	publisher   domain.Publisher
 	senders     map[string]domain.Sender
+	chatLister  domain.ChatLister
 	sendTimeout time.Duration
 	logger      *log.StdLogger
 }
 
-func NewService(store domain.Store, publisher domain.Publisher, senders []domain.Sender, sendTimeout time.Duration) (*Service, error) {
+func NewService(store domain.Store, publisher domain.Publisher, senders []domain.Sender, chatLister domain.ChatLister, sendTimeout time.Duration) (*Service, error) {
 	index := make(map[string]domain.Sender, len(senders))
 	for _, sender := range senders {
 		platform := sender.Platform()
@@ -30,7 +31,7 @@ func NewService(store domain.Store, publisher domain.Publisher, senders []domain
 		}
 		index[platform] = sender
 	}
-	return &Service{store: store, publisher: publisher, senders: index, sendTimeout: sendTimeout, logger: log.For[Service]()}, nil
+	return &Service{store: store, publisher: publisher, senders: index, chatLister: chatLister, sendTimeout: sendTimeout, logger: log.For[Service]()}, nil
 }
 
 func (s *Service) Submit(ctx context.Context, caller string, msg domain.Message) (domain.Acceptance, error) {
@@ -121,6 +122,24 @@ func (s *Service) Deliver(envelope domain.Envelope) error {
 
 func (s *Service) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	return s.store.ListAccounts(ctx)
+}
+
+func (s *Service) ListAccountChats(ctx context.Context, accountID, pageToken string) (domain.ChatPage, error) {
+	if !validID(accountID) {
+		return domain.ChatPage{}, domain.ErrInvalid
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.sendTimeout)
+	defer cancel()
+	account, err := s.store.AccountSnapshot(ctx, accountID)
+	if err != nil {
+		return domain.ChatPage{}, err
+	}
+	if account.Platform != "feishu_app" {
+		return domain.ChatPage{}, domain.ErrInvalid
+	}
+	// Listing chats configures an account; its delivery switch does not prevent
+	// administrators from preparing exits before enabling notifications.
+	return s.chatLister.ListChats(ctx, account.Credentials, pageToken)
 }
 
 func (s *Service) SaveAccount(ctx context.Context, input domain.SaveAccount) (domain.Account, error) {

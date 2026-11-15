@@ -166,6 +166,7 @@ Content-Type: application/json
 | 方法 | 路径（相对管理前缀） | 请求/用途 | 成功响应 data |
 | --- | --- | --- | --- |
 | GET | `/accounts/list` | 列出全部账号，无分页 | `{items:[Account]}` |
+| GET | `/accounts/chats/list?accountId=<uuid>&pageToken=<游标>` | 飞书应用机器人所在群，pageToken 可省略 | `{items:[{chatId,name}],hasMore,nextPageToken}` |
 | POST | `/accounts/save` | 创建或整体更新账号 | `Account` |
 | POST | `/accounts/delete` | `{id}` | `null` |
 
@@ -181,7 +182,7 @@ Content-Type: application/json
 }
 ```
 
-`accounts/save` 必须提供 `name`、`platform`、`enabled`。省略 `id` 创建，提供 `id` 更新；`platform` 仅接受 `telegram` / `feishu`，创建后不可修改。
+`accounts/save` 必须提供 `name`、`platform`、`enabled`。省略 `id` 创建，提供 `id` 更新；`platform` 仅接受 `telegram` / `feishu` / `feishu_app`，创建后不可修改。
 
 创建账号必须提供 `credentials`；更新省略整个字段保留原值，提供则整体替换，不按内部字段合并。无效凭证、平台不支持或修改平台返回 `400`；更新不存在的 ID 返回 `404`。读取账号永远不返回凭证明文、密文或掩码，`credentialsConfigured` 也不代表已完成平台认证或投递成功。
 
@@ -189,6 +190,7 @@ Content-Type: application/json
 | --- | --- | --- |
 | `telegram` | `{botToken:string}` | 多个 Chat ID / 可选话题 |
 | `feishu`（群 Webhook） | `{webhookUrl:string,signingSecret?:string}` | 最多一个固定群出口，包括已禁用出口 |
+| `feishu_app`（企业自建应用机器人） | `{appId:string,appSecret:string}` | 多个群 Chat ID |
 
 Telegram 账号创建示例：
 
@@ -207,7 +209,47 @@ Telegram 账号创建示例：
 
 同一账号的多个出口共享一份凭证；凭证修改对后续受理生效，不追溯改变已入队快照。账号停用时所有子出口暂停受理，但出口自身 enabled 保持原值。被任何出口引用的账号都不可删除，返回 `409`，包括仅有已禁用出口的情况。
 
-当前飞书类型是单群自定义 Webhook，不接收 App ID/App Secret，也不能配置多个 chatId。飞书应用机器人作为后续独立接入类型实现，本次没有增加其管理字段或发送 API。
+`feishu` 仍是单群自定义 Webhook，不接收 App ID/App Secret。企业自建应用机器人使用独立的 `feishu_app` 类型；仅支持国内飞书自建应用，不接入商店应用或用户身份认证。
+
+飞书应用账号创建示例：
+
+```json
+{
+  "name": "飞书运维应用",
+  "platform": "feishu_app",
+  "enabled": true,
+  "credentials": {
+    "appId": "<App ID>",
+    "appSecret": "<App Secret>"
+  }
+}
+```
+
+App ID 和 App Secret 均作为仅写凭证保存；更新凭证需提供完整的一对，省略整个 credentials 保留原值。保存账号不向平台发起认证，不把 `credentialsConfigured` 当作凭证有效性校验。
+
+群列表接口要求有效管理员 Cookie 会话，并返回 `Cache-Control: no-store`。`accountId` 必填且为 UUID，只接受已保存的 `feishu_app` 账号；停用账号也可读取列表用于配置。pageToken 是不透明分页游标，首请求省略；后续传入上次响应的 nextPageToken，必须进行 URL 编码。服务端每次只向飞书请求一页，固定每页 100 条、按群创建时间升序，不将凭证或 tenant_access_token 传给浏览器。
+
+成功响应为 `200`，示例：
+
+```json
+{
+  "code": 200,
+  "data": {
+    "items": [
+      {
+        "chatId": "oc_a0553eda9014c201e6969b478895c230",
+        "name": "运维告警群"
+      }
+    ],
+    "hasMore": true,
+    "nextPageToken": "<下一页游标>"
+  },
+  "message": "操作成功",
+  "time": "2026-11-15T10:00:00+08:00"
+}
+```
+
+无群时 items 为 `[]`；最后一页 hasMore 为 false、nextPageToken 为空字符串。账号 ID 无效或平台不是 feishu_app 返回 `400`，账号不存在返回 `404`，平台认证、权限、限流、网络或响应错误返回安全的 `503`，会话无效仍返回 `401`。列表仅包含机器人已加入的群，不包含用户单聊；群列表不入库，也不保证保存后机器人始终有发送资格。
 
 ### 3.3 群组出口（推送目标）
 
@@ -236,11 +278,12 @@ Telegram 账号创建示例：
 
 `targets/save` 的 `name`、`accountId`、`enabled`、`config` 必填。省略 `id` 创建，提供 `id` 更新；accountId 必须引用存在的账号。出口允许更换账号，同时需按新账号的平台提供完整 config。无效配置返回 `400`，账号或出口不存在返回 `404`。
 
-平台凭证只能通过 accounts/save 维护，不通过出口写入。为同一个 TG Bot 配置多个群时，创建多个引用同一 accountId 的出口，不重复提交 Bot Token。
+平台凭证只能通过 accounts/save 维护，不通过出口写入。为同一个 TG Bot 或飞书应用配置多个群时，创建多个引用同一 accountId 的出口，不重复提交账号凭证。
 
 | 所属账号平台 | 出口 config |
 | --- | --- |
 | `feishu` | `{}`，账号已确定唯一所在群 |
+| `feishu_app` | `{chatId:string}`，应用机器人所在群 |
 | `telegram` | `{chatId:string,messageThreadId?:正整数}` |
 
 Telegram 出口的创建示例：
@@ -258,6 +301,21 @@ Telegram 出口的创建示例：
 ```
 
 无需话题时省略 messageThreadId。飞书 Webhook 出口引用对应飞书账号、config 为 `{}`；一个该账号已存在其他出口时，新增或改绑第二个出口返回 `409`，禁用原出口不会释放这个名额。
+
+飞书应用出口示例：
+
+```json
+{
+  "name": "飞书运维告警群",
+  "accountId": "c80b06ac-cb8d-4db2-9b07-3cfca69aecf8",
+  "enabled": true,
+  "config": {
+    "chatId": "oc_a0553eda9014c201e6969b478895c230"
+  }
+}
+```
+
+后台先保存应用账号，再从群列表选择 chatId，支持分页加载与刷新；多个出口可共用应用账号。出口不接收 App Secret 或 messageThreadId。保存出口校验 chatId 配置形状，不增加平台群成员查询；机器人退群、群发言限制或权限变化在实际投递时由平台响应判定。text 使用应用消息 API 的 text 类型，Markdown 使用 interactive 卡片 schema 2.0，标题保持普通文本；HTTP 消息入口与 SDK 无需增加平台参数。
 
 仍被路由组引用的出口不能删除，返回 `409`，先解除绑定。`targets/test` 只选择指定出口，复用同一 eventbus 投递链路；不存在返回 `404`，账号或出口禁用返回 `503`。测试成功受理仍是 `202`，不提供同步平台成功回执。
 
@@ -302,7 +360,7 @@ Telegram 出口的创建示例：
 | `413` | 请求体超过 64 KiB |
 | `415` | 请求媒体类型不支持 |
 | `500` | 未分类的内部错误，响应仅提供安全文案 |
-| `503` | 无可用目标、eventbus 入队失败/超时或配置存储暂不可用 |
+| `503` | 无可用目标、eventbus 入队失败/超时、配置存储暂不可用或管理群列表的平台调用失败 |
 
 不向响应传递数据库 SQL、连接串、平台响应原文、网络请求 URL 或 SDK 原始错误。入口与管理后台均只暴露上述稳定状态语义；平台发送在受理后发生，其错误不能映射回已完成的发送 HTTP 请求。
 
@@ -312,6 +370,8 @@ Go SDK 仅封装上述消息入口与同一 envelope，不另建 wire 协议；�
 
 - [Beszel Generic 通知](https://beszel.dev/guide/notifications/generic)：Generic 自定义鉴权头及 Shoutrrr JSON。
 - [飞书自定义机器人发送卡片](https://open.feishu.cn/document/feishu-cards/quick-start/send-message-cards-with-custom-bot)：卡片 2.0 与 Markdown 元素。
+- [飞书自建应用 tenant_access_token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/tenant_access_token)：企业自建应用 OAuth 凭证。
+- [飞书应用消息内容结构](https://open.feishu.cn/document/server-docs/im-v1/message-content-description/create_json?lang=zh-CN)、[官方群列表说明](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)：应用消息编码、机器人群列表权限和分页。
 - [Telegram sendRichMessage](https://core.telegram.org/bots/api#sendrichmessage)、[Rich message formatting options](https://core.telegram.org/bots/api#rich-message-formatting-options)：Markdown 消息接口与支持范围。
 
 这些平台映射以 2026-11-15 核对的官方文档为设计依据；未来实现或升级平台接口时应重新核对。
