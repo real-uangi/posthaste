@@ -4,6 +4,7 @@ import type {
   AccountChatPage,
   AccountInput,
   GroupInput,
+  IntegrationConfig,
   Session,
   Target,
   TargetGroup,
@@ -89,6 +90,23 @@ export const api = {
   login: async (password: string) =>
     sessionValue(await request<Session>("/auth/login", "POST", { password })),
   logout: () => request<null>("/auth/logout", "POST"),
+  integrationConfig: async (signal?: AbortSignal) => {
+    const value = await request<IntegrationConfig>("/integration/config", "GET", undefined, signal);
+    if (!value || typeof value.notifyUrl !== "string" || typeof value.ingressToken !== "string" || !value.ingressToken) {
+      throw new Error("服务未返回有效的接入配置，请重新加载。");
+    }
+    // 地址在响应边界验证一次，示例生成器只处理可信的 HTTP(S) 地址。
+    let endpoint: URL;
+    try {
+      endpoint = new URL(value.notifyUrl);
+    } catch {
+      throw new Error("服务未返回有效的接入配置，请重新加载。");
+    }
+    if ((endpoint.protocol !== "https:" && endpoint.protocol !== "http:") || !endpoint.hostname || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+      throw new Error("服务未返回有效的接入配置，请重新加载。");
+    }
+    return value;
+  },
   accounts: async (signal?: AbortSignal) => {
     const value = await request<{ items: Account[] }>("/accounts/list", "GET", undefined, signal);
     if (!value || !Array.isArray(value.items)) {

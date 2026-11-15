@@ -70,11 +70,11 @@
 - 错误映射为安全状态和文案，不能直接将绑定、数据库、平台或网络原始错误交给 allingo 的错误渲染器。
 - 消息入口只接受独立全局 Bearer Token；管理 API 使用管理员 Cookie 会话，所有管理 POST（含登录、退出）校验同源 Origin。
 - 会话使用随机 opaque ID，12 小时有效，HttpOnly、SameSite=Lax，生产 Secure，退出失效、重启失效。不得增加账户注册、RBAC 或 Redis 会话。
-- 凭证不出现在读取响应、日志、错误、测试结果和 URL 查询参数中；入站入口认证也不支持 query Token。
+- 平台凭证不出现在读取响应或 URL 查询参数中，任何凭证均不得进入日志、错误或测试结果。入口 Token 仅允许通过已认证的 `GET /api/v1/admin/integration/config` 返回，并设置 `Cache-Control: no-store`；其他响应不得返回入口 Token。入站入口认证不支持 query Token，Shoutrrr 配置中的 `@Authorization` 仅用于生成请求头。
 - Sender 必须检查平台业务响应，不能把 HTTP 2xx 一律当作成功。日志前消除 URL 错误中的 Token 和完整机器人路径。
 - 飞书应用机器人使用独立 `feishu_app` 类型和国内自建应用 OAuth 凭证；Token 缓存按凭证版本隔离，提前 60 秒失效，按需获取且不启动后台刷新，不因认证失败当次刷新重发。群列表经应用用例和只读领域端口访问，仅供管理群选择，不扩大通用投递接口。
 - Bark 使用独立 `bark` Sender；服务基础地址、设备 Key 和可选 Basic Auth 均保存在账号凭证。发送使用基础地址下的 `/push` JSON POST，设备 Key 只进正文，Basic Auth 只进请求头。一个账号绑定一个设备，多个出口仅区分通知分组和提醒配置；不得把设备 Key 放进出口公开 config。
-- 后台管理账号、账号下的群组出口、路由组、默认组和测试发送；测试反馈为“已入队”。不增加投递历史、监控大屏或成功送达提示。
+- 后台管理账号、账号下的群组出口、路由组、默认组和测试发送；测试反馈为“已入队”。接入说明页提供 Shoutrrr、cURL 和 Go SDK 示例，默认遮住入口 Token，复制时包含真实密钥；Token 只保存在当前页面组件内存，离开页面或退出后释放，不写入浏览器存储或页面地址。不增加投递历史、监控大屏或成功送达提示。
 - `web/` 是单一 React/TypeScript/Vite 应用，不建立 monorepo、共享 SDK 包或动态表单引擎。静态资源同源嵌入 Go，未知 API 不得回退到 SPA HTML。
 - 表单必须处理加载、失败、空列表和 false/空列表提交；凭证省略保留的行为必须与 API 一致。具体品牌视觉尚未定稿，不照搬参考项目的颜色、字体或页面。
 

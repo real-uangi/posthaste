@@ -9,6 +9,51 @@ function envelope(status: number, data: unknown, message = "安全文案") {
   });
 }
 
+test("接入配置通过同源 Cookie 读取并传递取消信号", async (t) => {
+  const calls: Array<{ input: unknown; init?: RequestInit }> = [];
+  const config = { notifyUrl: "https://notify.example.com/api/v1/notify", ingressToken: "fixture-token" };
+  t.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {
+    calls.push({ input, init });
+    return envelope(200, config);
+  });
+  const controller = new AbortController();
+  assert.deepEqual(await api.integrationConfig(controller.signal), config);
+  assert.equal(calls[0].input, "/api/v1/admin/integration/config");
+  assert.equal(calls[0].init?.method, "GET");
+  assert.equal(calls[0].init?.credentials, "same-origin");
+  assert.equal(calls[0].init?.body, undefined);
+  assert.equal(calls[0].init?.signal, controller.signal);
+});
+
+test("接入配置拒绝无效响应，不将响应内容写入错误文案", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => envelope(200, null));
+  for (const data of [
+    null,
+    {},
+    { notifyUrl: "/api/v1/notify", ingressToken: "fixture-token" },
+    { notifyUrl: "https://notify.example.com/api/v1/notify", ingressToken: "" },
+    { notifyUrl: "https://notify.example.com/api/v1/notify", ingressToken: 42 },
+    { notifyUrl: "ftp://notify.example.com/api/v1/notify", ingressToken: "fixture-token" },
+    { notifyUrl: "https://fixture-token@notify.example.com/api/v1/notify", ingressToken: "fixture-token" },
+    { notifyUrl: "https://notify.example.com/api/v1/notify?token=fixture-token", ingressToken: "fixture-token" },
+  ]) {
+    fetch.mock.mockImplementation(async () => envelope(200, data));
+    await assert.rejects(api.integrationConfig(), (error: Error) => {
+      assert.match(error.message, /有效的接入配置/);
+      assert.equal(error.message.includes("fixture-token"), false);
+      return true;
+    });
+  }
+});
+
+test("接入配置会话失效与取消保留对应错误类型", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => envelope(401, null, "会话已失效"));
+  await assert.rejects(api.integrationConfig(), (error: unknown) => error instanceof APIError && error.status === 401);
+  const aborted = new DOMException("请求已取消", "AbortError");
+  fetch.mock.mockImplementation(async () => { throw aborted; });
+  await assert.rejects(api.integrationConfig(new AbortController().signal), (error: unknown) => error === aborted);
+});
+
 test("登录发送同源 Cookie 请求，退出不添加无意义 JSON body", async (t) => {
   const calls: Array<{ input: unknown; init?: RequestInit }> = [];
   t.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {

@@ -9,7 +9,7 @@
 - 所有资源 ID 和 `messageId` 均为 UUID 字符串；时间为 RFC 3339 字符串。
 - 响应沿用 allingo envelope：`{code, data, message, time}`。`code` 为数字，必须等于真实 HTTP 状态码，不能用 HTTP 200 包装 code 202。
 - envelope 的 `message` 是安全提示文案，不是可匹配的业务错误码。调用方依据 HTTP 状态和 `code` 处理结果，不匹配文案。
-- 错误响应的 `data` 为 `null`；JSON 响应体和日志不暴露口令、会话值、入口 token、平台凭证、完整 webhook URL 或上游原始错误。登录仅通过受保护的 Set-Cookie 设置会话。
+- 错误响应的 `data` 为 `null`；JSON 响应体和日志不暴露口令、会话值、平台凭证、完整 webhook URL 或上游原始错误。入口 token 仅允许通过已认证的接入配置接口（3.5）返回，其他响应与所有日志、错误均不得包含入口 token。登录仅通过受保护的 Set-Cookie 设置会话。
 
 成功受理的实际 HTTP 状态为 `202 Accepted`：
 
@@ -110,6 +110,8 @@ generic://notify.example.com/api/v1/notify?template=json&caller=beszel&@Authoriz
 上述 `generic://` 是填入 Beszel 的配置，不是 HTTP 服务监听协议。Generic 最终向 `https://notify.example.com/api/v1/notify?caller=beszel` 发出带鉴权头的 POST 请求；不要用这个普通 HTTPS 地址代替包含模板和鉴权头配置的通知 URL。token 不作为 Posthaste 的 query 鉴权参数。
 
 Beszel Generic 使用 Shoutrrr JSON 格式，其 `title` / `message` 可直接由本接口接收；未提供 `format` 时按文本推送。`beszel` 不是 Posthaste 的内置平台解析器：它仅是管理员配置的 caller。即使未配置该 caller，也会按照上述规则进入默认组。
+
+使用 Markdown 时，在 Shoutrrr 配置中增加 `$format=markdown`，由 JSON 模板将其作为正文的 `format` 字段发送。若配置的服务地址使用 HTTP，增加 `disabletls=yes`，使 Generic 使用 HTTP 而非默认的 HTTPS。后台“接入说明”页可根据实际服务地址、入口 token、caller 和格式生成完整 Shoutrrr、cURL 与 Go SDK 示例；其复制结果包含入口密钥。
 
 ### 2.5 受理与投递语义
 
@@ -389,11 +391,28 @@ Bark config 可为空对象，所有字段均可选；level 非空时仅接受 `
 
 默认组通过 `caller="default"` 标识，固定存在；可以修改名称和成员，不能删除或修改 caller，违反时返回 `409`。删除其他组后，原 caller 将成为未知 caller，后续消息按照默认路由规则进入默认组。
 
+### 3.5 接入配置
+
+| 方法 | 路径（相对管理前缀） | 请求/用途 | 成功响应 data |
+| --- | --- | --- | --- |
+| GET | `/integration/config` | 获取接入示例所需地址与入口 token，无请求体 | `{notifyUrl,ingressToken}` |
+
+要求有效管理员 Cookie 会话；未登录、会话失效或仅提供入口 Bearer 时返回 `401`。成功返回真实 HTTP `200`，响应设置 `Cache-Control: no-store`。`notifyUrl` 由配置的 `POSTHASTE_PUBLIC_URL` origin 加 `/api/v1/notify` 生成，不取请求 Host。`data` 仅包含以下两项，不返回管理员口令、加密主密钥或平台凭证：
+
+```json
+{
+  "notifyUrl": "https://notify.example.com/api/v1/notify",
+  "ingressToken": "<入口 token>"
+}
+```
+
+该接口是读取入口 token 的专用例外，平台账号凭证仍只写。后台仅在接入说明页挂载时读取，默认以占位符遮住示例中的 token；“显示密钥”可查看明文，复制始终包含真实密钥并明确提示。token 只保存在当前页面组件内存中，离开页面或退出后释放，不写入浏览器存储或页面地址。接口读取不会发送消息；消息受理、caller 路由及 Go SDK 协议保持不变。
+
 ## 4. 状态与安全错误映射
 
 | HTTP / code | 含义 |
 | --- | --- |
-| `200` | 登录、会话查询、退出和普通配置操作成功 |
+| `200` | 登录、会话查询、退出、接入配置读取和普通配置操作成功 |
 | `202` | 普通发送或目标测试已进入内存队列 |
 | `400` | JSON/字段/UUID 非法、消息为空、format 不支持、平台或配置不合法 |
 | `401` | 入口 Bearer 无效、管理员口令错误或管理会话无效 |

@@ -22,6 +22,7 @@ Posthaste 是面向内部业务系统的自托管消息／告警推送中心：�
 - 飞书应用机器人使用 App ID / App Secret，后台从机器人已加入的群列表选择出口，支持刷新和分页加载。
 - Bark 支持官方和自建服务，向设备发送文本/Markdown 通知；可配置分组、通知等级、铃声、30 秒循环响铃和点击跳转。
 - caller 路由组可绑定不同账号下的多个出口。后台提供账号、群组出口、路由组和默认组管理，以单管理员口令登录；出口测试复用正常异步链路。
+- 登录后的“接入说明”页可按 caller 和文本/Markdown 格式生成 Shoutrrr、cURL、Go SDK 示例，并一键复制包含入口密钥的完整配置。
 - 独立 Go SDK，方便其他 Go 服务发送消息，与 HTTP v1 保持同一协议。
 
 投递为**内存尽力发送**。202 只表示进入当前进程队列，不代表送达；不提供消息历史、自动重试、幂等去重、重启恢复或结果查询。messageId 只用于日志关联。客户端超时后重新提交可能重复推送。
@@ -45,6 +46,10 @@ Posthaste 是面向内部业务系统的自托管消息／告警推送中心：�
 
 ## 消息接入示例
 
+登录后台后打开“接入说明”，可直接复制实际服务地址及入口 Token 生成的 Shoutrrr 配置、cURL 命令和 Go SDK 代码。caller 留空使用默认组，也可选择已有路由组的建议值或原样填写；未知 caller 回退默认组，命中无可用出口的组返回 503。页面不会发送测试请求，202 仍仅表示已入队。
+
+接入页通过需要管理员 Cookie 会话的 `GET /api/v1/admin/integration/config` 读取配置，入口 Bearer 不能代替会话，响应不缓存。密钥默认遮住，可主动显示，复制始终包含真实密钥；Token 只保存在当前页面组件内存，离开页面或退出后释放，不写入浏览器存储或页面地址。平台账号凭证继续只写。SDK 当前尚无已发布标签，页面示例使用已实现接口，本地引用方法见 [SDK README](sdk/go/README.md)。
+
 服务部署后的 HTTP 调用形状如下：
 
 ```http
@@ -66,6 +71,8 @@ generic://notify.example.com/api/v1/notify?template=json&caller=beszel&@Authoriz
 ```
 
 其中 caller 只是服务端配置的路由键，不是身份凭证；省略 format 时按纯文本发送。完整响应、安全状态与集成说明见 [HTTP API](docs/API.md)。SDK 接口、错误处理和本地引用方法见 [Go SDK 规范](docs/GO_SDK.md) 与 [SDK README](sdk/go/README.md)，当前尚无已发布标签。
+
+Shoutrrr 选择 Markdown 时增加 `$format=markdown`；HTTP 服务地址需要 `disabletls=yes`。`@Authorization` 会转换为 HTTP 请求头，不会把入口 Token 作为 Posthaste 的 query 鉴权参数。
 
 ## 安装依赖、检查与构建
 
@@ -163,3 +170,5 @@ Bark 通过 APNs 推送，无需常驻 Mac，也无需把 Apple Account 交给 P
 Bark 官方/自建服务、Basic Auth、设备通知权限、浏览器表单交互以及 APNs 实际接收均待真实环境验收；本地模拟检查不代表这些项目已通过。
 
 服务端和 SDK 独立检查；根 `go test ./...` 不覆盖嵌套 SDK 模块。SDK 发布使用 `sdk/go/vX.Y.Z` 标签，不与根服务版本绑定。发布、部署和推送须按单独授权执行。
+
+接入说明页的实际剪贴板操作、移动端布局和外部调用方联调仍待浏览器及真实环境验收；静态检查、生成示例编译和模拟协议测试不替代这些验收。

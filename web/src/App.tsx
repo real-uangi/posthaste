@@ -6,6 +6,7 @@ import GroupEditor from "./GroupEditor.js";
 import AccountEditor from "./AccountEditor.js";
 import TargetEditor from "./TargetEditor.js";
 import TestDialog from "./TestDialog.js";
+import IntegrationPage from "./IntegrationPage.js";
 import { feishuAccountOccupied, targetAvailability } from "./forms.js";
 import { barkLevelLabels, platformLabels } from "./types.js";
 import type { Account, Session, Target, TargetGroup } from "./types.js";
@@ -107,7 +108,8 @@ function Login({ notice, onAuthenticated }: { notice: string; onAuthenticated: (
   );
 }
 
-type Section = "accounts" | "targets" | "groups";
+type ResourceSection = "accounts" | "targets" | "groups";
+type Section = ResourceSection | "integration";
 type Editor =
   | { section: "accounts"; account?: Account }
   | { section: "targets"; target?: Target; initialAccountId?: string }
@@ -117,7 +119,7 @@ type Deletion =
   | { section: "targets"; item: Target }
   | { section: "groups"; item: TargetGroup };
 
-const sections: Record<Section, { label: string; create: string; description: string }> = {
+const sections: Record<ResourceSection, { label: string; create: string; description: string }> = {
   accounts: { label: "账号", create: "添加账号", description: "统一管理机器人凭证及其群组出口。" },
   targets: { label: "群组出口", create: "添加出口", description: "配置账号下需要接收消息的群组与话题。" },
   groups: { label: "路由组", create: "添加路由组", description: "按 Caller 将消息分发到预设群组出口。" },
@@ -246,7 +248,7 @@ function Console({ onUnauthorized, onSignOut }: { onUnauthorized: () => void; on
     setNotice(null);
     if (section === "targets") addTarget(filterAccountId || undefined);
     else if (section === "accounts") setEditor({ section: "accounts" });
-    else setEditor({ section: "groups" });
+    else if (section === "groups") setEditor({ section: "groups" });
   }
 
   const locked = Boolean(editor) || Boolean(pending) || refreshing;
@@ -264,15 +266,16 @@ function Console({ onUnauthorized, onSignOut }: { onUnauthorized: () => void; on
         <nav className="side-nav" aria-label="管理导航">
           <p className="nav-caption">配置管理</p>
           {(["accounts", "targets", "groups"] as const).map((key) => <button key={key} aria-current={section === key ? "page" : undefined} disabled={locked && section !== key} onClick={() => { setSection(key); setNotice(null); }}><span>{sections[key].label}</span>{status === "ready" && <span className="nav-count">{count[key]}</span>}</button>)}
+          <button aria-current={section === "integration" ? "page" : undefined} disabled={locked && section !== "integration"} onClick={() => { setSection("integration"); setNotice(null); }}>接入说明</button>
           <div className="nav-footnote"><span className="nav-footnote-line" />Posthaste 控制台</div>
         </nav>
         <main className="main-content">
           <div className="page-heading">
-            <div><p className="eyebrow">消息推送 / 配置</p><h1>{sections[section].label}</h1><p className="muted">{sections[section].description}</p></div>
-            <div className="heading-actions"><button className="button" disabled={locked || status === "loading"} onClick={() => void load(status === "failed")}>{refreshing ? "正在刷新…" : "刷新"}</button><button className="button button-primary" disabled={locked || status !== "ready" || createBlocked} title={createBlocked ? accounts.length === 0 ? "请先添加账号" : "此飞书群Webhook账号已经配置出口" : undefined} onClick={createItem}>{sections[section].create}</button></div>
+            <div><p className="eyebrow">消息推送 / {section === "integration" ? "接入" : "配置"}</p><h1>{section === "integration" ? "接入说明" : sections[section].label}</h1><p className="muted">{section === "integration" ? "选择调用方式，复制可直接使用的接入示例。" : sections[section].description}</p></div>
+            {section !== "integration" && <div className="heading-actions"><button className="button" disabled={locked || status === "loading"} onClick={() => void load(status === "failed")}>{refreshing ? "正在刷新…" : "刷新"}</button><button className="button button-primary" disabled={locked || status !== "ready" || createBlocked} title={createBlocked ? accounts.length === 0 ? "请先添加账号" : "此飞书群Webhook账号已经配置出口" : undefined} onClick={createItem}>{sections[section].create}</button></div>}
           </div>
           {notice && <Notice tone={notice.error ? "error" : "info"} onDismiss={() => setNotice(null)}>{notice.text}</Notice>}
-          {status === "loading" ? (
+          {section === "integration" ? <IntegrationPage groups={groups} onUnauthorized={onUnauthorized} /> : status === "loading" ? (
             <div className="loading-list" role="status" aria-label="正在加载配置">{[0, 1, 2].map((key) => <div className="loading-row" key={key}><div className="skeleton h-11 w-11" /><div className="grow"><div className="skeleton h-4 w-40" /><div className="skeleton h-3 w-56 mt-3" /></div></div>)}</div>
           ) : status === "failed" ? (
             <EmptyState title="暂时无法加载配置"><p>请检查服务连接后重新加载。</p><button className="button mt-4" onClick={() => void load(true)}>重新加载</button></EmptyState>

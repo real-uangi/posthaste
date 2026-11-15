@@ -86,6 +86,11 @@ export interface Acceptance {
   messageId: string;
 }
 
+export interface IntegrationConfig {
+  notifyUrl: string;
+  ingressToken: string;
+}
+
 export interface TargetInput {
   id?: string;
   name: string;

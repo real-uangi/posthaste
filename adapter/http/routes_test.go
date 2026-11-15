@@ -245,6 +245,48 @@ func protocolLogin(t *testing.T, h protocolHarness) *http.Cookie {
 	return nil
 }
 
+func TestIntegrationConfigRequiresAdminSession(t *testing.T) {
+	h := newProtocolHarness(t)
+	path := "/api/v1/admin/integration/config"
+	for _, headers := range []map[string]string{nil, {"Authorization": "Bearer ingress-token"}} {
+		response := protocolRequest(h.engine, http.MethodGet, path, "", headers)
+		requireProtocolEnvelope(t, response, http.StatusUnauthorized)
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("integration config response must not be cached")
+		}
+		if strings.Contains(response.Body.String(), "ingress-token") {
+			t.Fatal("unauthenticated response exposed the ingress token")
+		}
+	}
+
+	cookie := protocolLogin(t, h)
+	response := protocolRequest(h.engine, http.MethodPost, "/api/v1/admin/auth/logout", "",
+		map[string]string{"Origin": "https://posthaste.test"}, cookie)
+	requireProtocolEnvelope(t, response, http.StatusOK)
+	response = protocolRequest(h.engine, http.MethodGet, path, "", nil, cookie)
+	requireProtocolEnvelope(t, response, http.StatusUnauthorized)
+	if strings.Contains(response.Body.String(), "ingress-token") {
+		t.Fatal("revoked session exposed the ingress token")
+	}
+}
+
+func TestIntegrationConfigReturnsOnlyTrustedConnectionSettings(t *testing.T) {
+	h := newProtocolHarness(t)
+	cookie := protocolLogin(t, h)
+	response := protocolRequest(h.engine, http.MethodGet, "https://untrusted.test/api/v1/admin/integration/config", "", nil, cookie)
+	envelope := requireProtocolEnvelope(t, response, http.StatusOK)
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("integration config response must not be cached")
+	}
+	var settings map[string]string
+	if err := json.Unmarshal(envelope.Data, &settings); err != nil {
+		t.Fatal("integration config data must contain string settings")
+	}
+	if len(settings) != 2 || settings["notifyUrl"] != "https://posthaste.test/api/v1/notify" || settings["ingressToken"] != "ingress-token" {
+		t.Fatal("integration config must contain only the configured notify URL and ingress token")
+	}
+}
+
 func TestAccountChatListRequiresAdminAndUsesOpaqueCursor(t *testing.T) {
 	h := newProtocolHarness(t)
 	path := "/api/v1/admin/accounts/chats/list?accountId=" + routeAccountID + "&pageToken=cursor%2B%2F%3D%3F"

@@ -101,6 +101,13 @@ func Register(engine *gin.Engine, cfg *config.Config, auth *authapp.Service, not
 		http.SetCookie(c.Writer, &http.Cookie{Name: cookieName, Path: "/api/v1/admin", MaxAge: -1, Expires: time.Unix(1, 0), HttpOnly: true, Secure: cfg.SecureCookies, SameSite: http.SameSiteLaxMode})
 		respond(c, http.StatusOK, "已退出", nil)
 	})
+	admin.GET("/integration/config", func(c *gin.Context) {
+		// This administrator-only exception exposes only the ingress token needed
+		// to generate connection examples; platform credentials remain write-only.
+		respond(c, http.StatusOK, "OK", gin.H{
+			"notifyUrl": cfg.Origin + "/api/v1/notify", "ingressToken": cfg.IngressToken,
+		})
+	})
 	admin.GET("/accounts/list", func(c *gin.Context) {
 		items, err := notifications.ListAccounts(c.Request.Context())
 		if items == nil {
