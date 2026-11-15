@@ -1,10 +1,19 @@
-export type Platform = "feishu" | "feishu_app" | "telegram";
+export type Platform = "feishu" | "feishu_app" | "telegram" | "bark";
 export type Format = "text" | "markdown";
+export type BarkLevel = "active" | "passive" | "timeSensitive" | "critical";
 
 export const platformLabels: Record<Platform, string> = {
   feishu: "飞书群Webhook",
   feishu_app: "飞书应用机器人",
   telegram: "Telegram Bot",
+  bark: "Bark",
+};
+
+export const barkLevelLabels: Record<BarkLevel, string> = {
+  active: "普通通知",
+  passive: "静默通知",
+  timeSensitive: "时效性通知",
+  critical: "重要警告",
 };
 
 export interface Account {
@@ -26,6 +35,9 @@ export interface AccountInput {
     botToken?: string;
     appId?: string;
     appSecret?: string;
+    serverUrl?: string;
+    deviceKey?: string;
+    basicAuth?: { username: string; password: string };
   };
 }
 
@@ -43,6 +55,11 @@ export interface AccountChatPage {
 export interface TargetConfig {
   chatId?: string;
   messageThreadId?: number;
+  group?: string;
+  level?: BarkLevel;
+  sound?: string;
+  call?: boolean;
+  url?: string;
 }
 
 export interface Target {

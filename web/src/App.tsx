@@ -7,7 +7,7 @@ import AccountEditor from "./AccountEditor.js";
 import TargetEditor from "./TargetEditor.js";
 import TestDialog from "./TestDialog.js";
 import { feishuAccountOccupied, targetAvailability } from "./forms.js";
-import { platformLabels } from "./types.js";
+import { barkLevelLabels, platformLabels } from "./types.js";
 import type { Account, Session, Target, TargetGroup } from "./types.js";
 
 function Brand() {
@@ -283,26 +283,26 @@ function Console({ onUnauthorized, onSignOut }: { onUnauthorized: () => void; on
                 <section className="resource-list" aria-label={`${sections[section].label}列表`}>
                   <div className="list-caption"><span>{section === "targets" && filteredAccount ? `${filteredAccount.name}的出口` : `已配置${sections[section].label}`}</span><span className="mono">{section === "targets" ? visibleTargets.length : count[section]}</span></div>
                   {section === "accounts" && (
-                    accounts.length === 0 ? <EmptyState title="还没有账号"><p>添加 Telegram Bot、飞书群Webhook或飞书应用机器人，再配置账号下的群组出口。</p></EmptyState> : accounts.map((account) => {
+                    accounts.length === 0 ? <EmptyState title="还没有账号"><p>添加 Telegram Bot、飞书机器人或 Bark，再配置账号下的出口。</p></EmptyState> : accounts.map((account) => {
                       const children = targets.filter((target) => target.accountId === account.id);
                       const selected = editor?.section === "accounts" && editor.account?.id === account.id;
                       return (
                         <article className={`resource-row account-row ${selected ? "is-selected" : ""}`} key={account.id}>
-                          <div className="resource-identity"><span className="platform-mark" aria-hidden="true">{account.platform === "telegram" ? "T" : "F"}</span><div className="resource-copy"><div className="resource-title"><h2>{account.name}</h2><span className={`status-tag ${account.enabled ? "is-enabled" : ""}`}>{account.enabled ? "启用" : "停用"}</span></div><p className="resource-meta">{platformLabels[account.platform]}<span>·</span>{children.length} 个群组出口</p><p className="target-detail">{account.credentialsConfigured ? "凭证已配置" : "凭证未配置"}{account.platform === "feishu" ? " · Webhook 固定一个飞书群" : ""}</p></div></div>
+                          <div className="resource-identity"><span className="platform-mark" aria-hidden="true">{account.platform === "bark" ? "B" : account.platform === "telegram" ? "T" : "F"}</span><div className="resource-copy"><div className="resource-title"><h2>{account.name}</h2><span className={`status-tag ${account.enabled ? "is-enabled" : ""}`}>{account.enabled ? "启用" : "停用"}</span></div><p className="resource-meta">{platformLabels[account.platform]}<span>·</span>{children.length} 个群组出口</p><p className="target-detail">{account.credentialsConfigured ? "凭证已配置" : "凭证未配置"}{account.platform === "feishu" ? " · Webhook 固定一个飞书群" : ""}</p></div></div>
                           <div className="row-actions account-actions"><button className="text-button" disabled={locked} onClick={() => viewAccountTargets(account)}>查看出口</button><button className="text-button" disabled={locked || feishuAccountOccupied(account, targets)} title={feishuAccountOccupied(account, targets) ? "此Webhook账号只能配置一个出口" : undefined} onClick={() => addTarget(account.id)}>添加出口</button><button className="text-button" disabled={locked} onClick={() => setEditor({ section: "accounts", account })}>编辑</button><button className="text-button" disabled={locked} onClick={() => void toggleAccount(account)}>{pending === account.id ? "处理中…" : account.enabled ? "停用" : "启用"}</button><button className="text-button danger-text" disabled={locked || children.length > 0} title={children.length > 0 ? "请先删除此账号下的全部出口（含停用出口）" : undefined} onClick={() => confirmDelete({ section: "accounts", item: account })}>删除</button></div>
                         </article>
                       );
                     })
                   )}
                   {section === "targets" && (
-                    visibleTargets.length === 0 ? <EmptyState title={filteredAccount ? "此账号还没有群组出口" : "还没有群组出口"}><p>为账号配置接收消息的群组或话题。</p>{accounts.length === 0 && <button className="button mt-4" onClick={() => { setSection("accounts"); setEditor({ section: "accounts" }); }}>添加账号</button>}</EmptyState> : visibleTargets.map((target) => {
+                    visibleTargets.length === 0 ? <EmptyState title={filteredAccount ? "此账号还没有群组出口" : "还没有群组出口"}><p>为账号配置群组、话题或 Bark 提醒方式。</p>{accounts.length === 0 && <button className="button mt-4" onClick={() => { setSection("accounts"); setEditor({ section: "accounts" }); }}>添加账号</button>}</EmptyState> : visibleTargets.map((target) => {
                       const account = accounts.find((item) => item.id === target.accountId);
                       const state = targetAvailability(target, account);
                       const boundCount = groups.filter((group) => group.targetIds.includes(target.id)).length;
                       const selected = editor?.section === "targets" && editor.target?.id === target.id;
                       return (
                         <article className={`resource-row ${selected ? "is-selected" : ""}`} key={target.id}>
-                          <div className="resource-identity"><span className="platform-mark" aria-hidden="true">{account ? account.platform === "telegram" ? "T" : "F" : "—"}</span><div className="resource-copy"><div className="resource-title"><h2>{target.name}</h2><span className={`status-tag ${state.enabled ? "is-enabled" : ""}`}>{state.label}</span></div><p className="resource-meta">{account?.name ?? "账号不可用，请刷新"}<span>·</span>{boundCount} 个路由组{account && !account.enabled && <><span>·</span>出口开关{target.enabled ? "启用" : "停用"}</>}</p>{(account?.platform === "telegram" || account?.platform === "feishu_app") && <p className="target-detail mono">Chat ID {target.config.chatId}{account.platform === "telegram" && target.config.messageThreadId ? ` / 话题 ${target.config.messageThreadId}` : ""}</p>}</div></div>
+                          <div className="resource-identity"><span className="platform-mark" aria-hidden="true">{account ? account.platform === "bark" ? "B" : account.platform === "telegram" ? "T" : "F" : "—"}</span><div className="resource-copy"><div className="resource-title"><h2>{target.name}</h2><span className={`status-tag ${state.enabled ? "is-enabled" : ""}`}>{state.label}</span></div><p className="resource-meta">{account?.name ?? "账号不可用，请刷新"}<span>·</span>{boundCount} 个路由组{account && !account.enabled && <><span>·</span>出口开关{target.enabled ? "启用" : "停用"}</>}</p>{(account?.platform === "telegram" || account?.platform === "feishu_app") && <p className="target-detail mono">Chat ID {target.config.chatId}{account.platform === "telegram" && target.config.messageThreadId ? ` / 话题 ${target.config.messageThreadId}` : ""}</p>}{account?.platform === "bark" && <p className="target-detail">{target.config.group ? `${target.config.group} · ` : ""}{barkLevelLabels[target.config.level ?? "active"]}{target.config.call ? " · 循环响铃" : ""}</p>}</div></div>
                           <div className="row-actions"><button className="text-button" disabled={locked || !state.enabled} title={!state.enabled ? state.label : undefined} onClick={() => { if (account) setTesting({ target, account }); }}>测试</button><button className="text-button" disabled={locked} onClick={() => setEditor({ section: "targets", target })}>编辑</button><button className="text-button" disabled={locked} onClick={() => void toggleTarget(target)}>{pending === target.id ? "处理中…" : target.enabled ? "停用" : "启用"}</button><button className="text-button danger-text" disabled={locked || boundCount > 0} title={boundCount > 0 ? "请先解除路由组绑定" : undefined} onClick={() => confirmDelete({ section: "targets", item: target })}>删除</button></div>
                         </article>
                       );

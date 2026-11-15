@@ -211,7 +211,7 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, payload
 	return err
 }
 
-func platformJSON(ctx context.Context, client *http.Client, method, endpoint, bearer string, payload, response any) (int, error) {
+func platformJSON(ctx context.Context, client *http.Client, method, endpoint, authorization string, payload, response any) (int, error) {
 	var body io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -225,8 +225,8 @@ func platformJSON(ctx context.Context, client *http.Client, method, endpoint, be
 		return 0, domain.ErrUnavailable
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
 	}
 	res, err := client.Do(req)
 	if err != nil {

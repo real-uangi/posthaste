@@ -75,7 +75,7 @@ func (s *FeishuAppSender) Send(ctx context.Context, target domain.TargetSnapshot
 	var response struct {
 		Code *int `json:"code"`
 	}
-	status, err := platformJSON(ctx, s.client, http.MethodPost, "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id", token.value, payload, &response)
+	status, err := platformJSON(ctx, s.client, http.MethodPost, "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id", "Bearer "+token.value, payload, &response)
 	s.discardRejectedToken(key, token, status, response.Code)
 	if err != nil {
 		return err
@@ -106,7 +106,7 @@ func (s *FeishuAppSender) ListChats(ctx context.Context, credentials json.RawMes
 			PageToken string `json:"page_token"`
 		} `json:"data"`
 	}
-	status, err := platformJSON(ctx, s.client, http.MethodGet, "https://open.feishu.cn/open-apis/im/v1/chats?"+query.Encode(), token.value, nil, &response)
+	status, err := platformJSON(ctx, s.client, http.MethodGet, "https://open.feishu.cn/open-apis/im/v1/chats?"+query.Encode(), "Bearer "+token.value, nil, &response)
 	s.discardRejectedToken(key, token, status, response.Code)
 	if err != nil {
 		return domain.ChatPage{}, err

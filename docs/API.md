@@ -182,7 +182,7 @@ Content-Type: application/json
 }
 ```
 
-`accounts/save` 必须提供 `name`、`platform`、`enabled`。省略 `id` 创建，提供 `id` 更新；`platform` 仅接受 `telegram` / `feishu` / `feishu_app`，创建后不可修改。
+`accounts/save` 必须提供 `name`、`platform`、`enabled`。省略 `id` 创建，提供 `id` 更新；`platform` 仅接受 `telegram` / `feishu` / `feishu_app` / `bark`，创建后不可修改。
 
 创建账号必须提供 `credentials`；更新省略整个字段保留原值，提供则整体替换，不按内部字段合并。无效凭证、平台不支持或修改平台返回 `400`；更新不存在的 ID 返回 `404`。读取账号永远不返回凭证明文、密文或掩码，`credentialsConfigured` 也不代表已完成平台认证或投递成功。
 
@@ -191,6 +191,7 @@ Content-Type: application/json
 | `telegram` | `{botToken:string}` | 多个 Chat ID / 可选话题 |
 | `feishu`（群 Webhook） | `{webhookUrl:string,signingSecret?:string}` | 最多一个固定群出口，包括已禁用出口 |
 | `feishu_app`（企业自建应用机器人） | `{appId:string,appSecret:string}` | 多个群 Chat ID |
+| `bark` | `{serverUrl:string,deviceKey:string,basicAuth?:{username:string,password:string}}` | 同一设备的多个提醒配置出口 |
 
 Telegram 账号创建示例：
 
@@ -251,6 +252,26 @@ App ID 和 App Secret 均作为仅写凭证保存；更新凭证需提供完整�
 
 无群时 items 为 `[]`；最后一页 hasMore 为 false、nextPageToken 为空字符串。账号 ID 无效或平台不是 feishu_app 返回 `400`，账号不存在返回 `404`，平台认证、权限、限流、网络或响应错误返回安全的 `503`，会话无效仍返回 `401`。列表仅包含机器人已加入的群，不包含用户单聊；群列表不入库，也不保证保存后机器人始终有发送资格。
 
+Bark 账号使用 `platform="bark"`，官方服务创建示例：
+
+```json
+{
+  "name": "徐总的 iPhone",
+  "platform": "bark",
+  "enabled": true,
+  "credentials": {
+    "serverUrl": "https://api.day.app",
+    "deviceKey": "<Bark Device Key>"
+  }
+}
+```
+
+`serverUrl` 与 `deviceKey` 必填。serverUrl 为 HTTP(S) 基础地址，可带自建服务的路径前缀，例如 `https://bark.example.com/notify`，发送地址为其后的 `/push`；不接受 userinfo、query 或 fragment。不要填写 App 给出的带设备 Key 的完整推送 URL，也不要把 Key 放到出口 config。官方服务与自建服务使用同一平台类型，后台选择官方服务时填写固定官方地址；直接调用 API 时也应明确提供 serverUrl。账号保存只校验配置形状，不发测试推送或向服务器验证设备 Key。
+
+自建服务开启 Basic Auth 时，凭证增加 `"basicAuth":{"username":"<用户名>","password":"<口令>"}`，用户名和口令必须为完整非空的一对，用户名不可包含冒号。Basic Auth 走 Authorization 请求头，deviceKey 走 JSON 正文的 device_key。读取账号不返回上述字段；更新省略整个 credentials 时保留，提供时整体替换，包括服务地址、设备 Key 与 Basic Auth；新凭证省略 basicAuth 表示移除旧 Basic Auth。
+
+一个 Bark 账号对应一个服务上的设备 Key，可配置多个出口以区分通知分组和提醒方式；向多台设备推送时分别配置账号与出口，再用路由组绑定。重复为同一设备绑定多个出口会按各出口分别发送，不按设备 Key 做隐式去重。Bark 设备通知分组与 caller 路由组互相独立。
+
 ### 3.3 群组出口（推送目标）
 
 | 方法 | 路径（相对管理前缀） | 请求/用途 | 成功响应 data |
@@ -285,6 +306,7 @@ App ID 和 App Secret 均作为仅写凭证保存；更新凭证需提供完整�
 | `feishu` | `{}`，账号已确定唯一所在群 |
 | `feishu_app` | `{chatId:string}`，应用机器人所在群 |
 | `telegram` | `{chatId:string,messageThreadId?:正整数}` |
+| `bark` | `{group?:string,level?:string,sound?:string,call?:boolean,url?:string}` |
 
 Telegram 出口的创建示例：
 
@@ -316,6 +338,27 @@ Telegram 出口的创建示例：
 ```
 
 后台先保存应用账号，再从群列表选择 chatId，支持分页加载与刷新；多个出口可共用应用账号。出口不接收 App Secret 或 messageThreadId。保存出口校验 chatId 配置形状，不增加平台群成员查询；机器人退群、群发言限制或权限变化在实际投递时由平台响应判定。text 使用应用消息 API 的 text 类型，Markdown 使用 interactive 卡片 schema 2.0，标题保持普通文本；HTTP 消息入口与 SDK 无需增加平台参数。
+
+Bark 出口示例：
+
+```json
+{
+  "name": "iPhone 运维提醒",
+  "accountId": "f5635b8b-7b55-4dde-a319-39f5d4dde53a",
+  "enabled": true,
+  "config": {
+    "group": "运维告警",
+    "level": "active",
+    "sound": "minuet",
+    "call": false,
+    "url": "https://monitor.example.com"
+  }
+}
+```
+
+Bark config 可为空对象，所有字段均可选；level 非空时仅接受 `active`、`passive`、`timeSensitive`、`critical`。group 是手机通知分组，sound 是铃声名；url 是点击通知打开的绝对 URL，可为 HTTP(S) 或应用 URL Scheme，不允许 userinfo。后台新建出口默认 level=active、call=false，空的 group/sound/url 不提交。call 是布尔值，false 必须正常保存；发送到 Bark 时 true/false 分别编码为字符串 `"1"`/`"0"`，字段省略时不提交给上游。critical 需在 Bark 授权「重要警告」；call 只表示循环响铃 30 秒，不会拨打电话。
+
+统一消息的 title 原样映射 Bark title；text 的 message 映射 body，markdown 的 message 映射 markdown，不同时发 body。出口测试仍返回「已入队」的 202，HTTP 成功状态与业务 code=200 才代表 Bark 请求成功；平台发送失败不会改写已经完成的受理响应，也不代表手机已读。Bark 原生加密、图片、通知 ID 更新/删除和历史 TTL 本次未开放，公共消息请求和 Go SDK 保持不变。
 
 仍被路由组引用的出口不能删除，返回 `409`，先解除绑定。`targets/test` 只选择指定出口，复用同一 eventbus 投递链路；不存在返回 `404`，账号或出口禁用返回 `503`。测试成功受理仍是 `202`，不提供同步平台成功回执。
 
@@ -372,6 +415,7 @@ Go SDK 仅封装上述消息入口与同一 envelope，不另建 wire 协议；�
 - [飞书自定义机器人发送卡片](https://open.feishu.cn/document/feishu-cards/quick-start/send-message-cards-with-custom-bot)：卡片 2.0 与 Markdown 元素。
 - [飞书自建应用 tenant_access_token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/tenant_access_token)：企业自建应用 OAuth 凭证。
 - [飞书应用消息内容结构](https://open.feishu.cn/document/server-docs/im-v1/message-content-description/create_json?lang=zh-CN)、[官方群列表说明](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)：应用消息编码、机器人群列表权限和分页。
+- [Bark 调用方式](https://github.com/Finb/Bark/blob/master/docs/tutorial.md)、[参数说明](https://github.com/Finb/Bark/blob/master/docs/params.md)、[服务端 API V2](https://github.com/Finb/bark-server/blob/master/docs/API_V2.md)：正文中的设备 Key、文本/Markdown 与通知配置。
 - [Telegram sendRichMessage](https://core.telegram.org/bots/api#sendrichmessage)、[Rich message formatting options](https://core.telegram.org/bots/api#rich-message-formatting-options)：Markdown 消息接口与支持范围。
 
 这些平台映射以 2026-11-15 核对的官方文档为设计依据；未来实现或升级平台接口时应重新核对。

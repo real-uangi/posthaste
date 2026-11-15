@@ -80,6 +80,24 @@ test("飞书群列表按保存账号分页读取，编码游标并传递取消�
   assert.equal(url.searchParams.get("pageToken"), firstPage.nextPageToken);
 });
 
+test("Bark 账号凭证只放保存正文，出口独立提交提醒选项和 false", async (t) => {
+  const calls: Array<{ input: unknown; body: unknown }> = [];
+  t.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {
+    calls.push({ input, body: init?.body ? JSON.parse(init.body as string) : undefined });
+    return envelope(200, null);
+  });
+  const credentials = {
+    serverUrl: "https://bark.example.com/prefix", deviceKey: "private-device-key",
+    basicAuth: { username: "user", password: "private-password" },
+  };
+  await api.saveAccount({ name: "iPhone", platform: "bark", enabled: true, credentials });
+  await api.saveTarget({ name: "普通提醒", accountId: "bark-account", enabled: false, config: { group: "运维", level: "active", call: false } });
+  assert.deepEqual(calls, [
+    { input: "/api/v1/admin/accounts/save", body: { name: "iPhone", platform: "bark", enabled: true, credentials } },
+    { input: "/api/v1/admin/targets/save", body: { name: "普通提醒", accountId: "bark-account", enabled: false, config: { group: "运维", level: "active", call: false } } },
+  ]);
+});
+
 test("飞书群列表拒绝缺失分页契约并保留认证、上游失败与取消语义", async (t) => {
   const fetch = t.mock.method(globalThis, "fetch", async () => envelope(200, { items: [], hasMore: true, nextPageToken: "" }));
   await assert.rejects(api.accountChats("account-id"), /有效的飞书群列表/);

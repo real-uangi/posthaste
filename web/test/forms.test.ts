@@ -12,6 +12,7 @@ const telegram: Account = {
 };
 const feishu: Account = { ...telegram, id: "feishu-account", platform: "feishu" };
 const feishuApp: Account = { ...telegram, id: "feishu-app-account", platform: "feishu_app" };
+const bark: Account = { ...telegram, id: "bark-account", platform: "bark", name: "我的 iPhone" };
 const target: Target = {
   id: "target-id",
   name: "运维群",
@@ -79,6 +80,50 @@ test("飞书应用账号创建与整体更换凭证，编辑默认保留且平�
   });
 });
 
+test("Bark 官方服务使用固定地址，不携带旧平台或自建认证字段", () => {
+  const draft = accountDraft();
+  draft.name = "我的 iPhone";
+  draft.platform = "bark";
+  draft.barkDeviceKey = " device-key ";
+  draft.barkServerUrl = "http://unused.internal";
+  draft.barkBasicAuth = true;
+  draft.barkUsername = "unused-user";
+  draft.barkPassword = "unused-password";
+  draft.botToken = "old-token";
+  draft.appSecret = "old-app-secret";
+  assert.equal(draft.barkService, "official");
+  assert.deepEqual(buildAccountInput(draft), {
+    name: "我的 iPhone", platform: "bark", enabled: true,
+    credentials: { serverUrl: "https://api.day.app", deviceKey: "device-key" },
+  });
+});
+
+test("Bark 自建服务保留子路径和完整 Basic Auth，不把空地址回退为官方服务", () => {
+  const draft = accountDraft(bark);
+  assert.equal(draft.barkDeviceKey, "");
+  assert.equal(draft.barkPassword, "");
+  assert.equal(Object.hasOwn(buildAccountInput(draft, bark), "credentials"), false);
+  draft.replaceCredentials = true;
+  draft.barkService = "custom";
+  draft.barkServerUrl = " http://bark.internal:8080/prefix/ ";
+  draft.barkDeviceKey = "replacement-key";
+  draft.barkBasicAuth = true;
+  draft.barkUsername = " user ";
+  draft.barkPassword = " significant spaces ";
+  draft.enabled = false;
+  assert.deepEqual(buildAccountInput(draft, bark), {
+    id: bark.id, name: bark.name, platform: "bark", enabled: false,
+    credentials: {
+      serverUrl: "http://bark.internal:8080/prefix/", deviceKey: "replacement-key",
+      basicAuth: { username: "user", password: " significant spaces " },
+    },
+  });
+  draft.barkBasicAuth = false;
+  assert.equal(Object.hasOwn(buildAccountInput(draft, bark).credentials!, "basicAuth"), false);
+  draft.barkServerUrl = "";
+  assert.equal(buildAccountInput(draft, bark).credentials?.serverUrl, "");
+});
+
 test("全局新建出口显式选账号，从账号进入时预选，编辑保留原账号", () => {
   assert.equal(targetDraft().accountId, "");
   assert.equal(targetDraft(undefined, telegram.id).accountId, telegram.id);
@@ -134,6 +179,7 @@ test("飞书Webhook一账号一出口，停用出口也占位，编辑自身不�
   assert.equal(feishuAccountOccupied(feishu, [child], child.id), false);
   assert.equal(feishuAccountOccupied(telegram, [target]), false);
   assert.equal(feishuAccountOccupied(feishuApp, [{ ...child, accountId: feishuApp.id }]), false);
+  assert.equal(feishuAccountOccupied(bark, [{ ...child, accountId: bark.id }]), false);
 });
 
 test("飞书应用出口只保存所选群，改绑不携带旧话题且空选择不能保存", () => {
@@ -148,6 +194,41 @@ test("飞书应用出口只保存所选群，改绑不携带旧话题且空选�
   draft.chatId = "";
   assert.throws(() => buildTargetInput(draft, feishuApp), /请选择飞书/);
   assert.deepEqual(buildTargetInput(draft, feishu, target).config, {});
+});
+
+test("Bark 提醒默认普通通知且显式提交 false，可清空分组铃声和跳转配置", () => {
+  const draft = targetDraft(undefined, bark.id);
+  assert.equal(draft.barkLevel, "active");
+  assert.equal(draft.barkCall, false);
+  draft.name = "普通提醒";
+  assert.deepEqual(buildTargetInput(draft, bark), {
+    name: "普通提醒", accountId: bark.id, enabled: true,
+    config: { level: "active", call: false },
+  });
+  const saved: Target = { ...target, accountId: bark.id, config: { group: "alerts", level: "critical", sound: "alarm", call: true, url: "myapp://alerts" } };
+  const edited = targetDraft(saved);
+  edited.enabled = false;
+  assert.deepEqual(buildTargetInput(edited, bark, saved), { ...saved, enabled: false });
+  edited.barkGroup = "";
+  edited.barkSound = "";
+  edited.barkUrl = "";
+  edited.barkCall = false;
+  assert.deepEqual(buildTargetInput(edited, bark, saved).config, { level: "critical", call: false });
+});
+
+test("Bark 与其他平台改绑只提交新平台配置，不泄露 Key、话题或提醒选项", () => {
+  const draft = targetDraft(target);
+  draft.barkGroup = "运维";
+  draft.barkSound = "alarm";
+  draft.barkCall = true;
+  draft.barkUrl = "https://alerts.example.com";
+  assert.deepEqual(buildTargetInput(draft, bark, target).config, {
+    group: "运维", level: "active", sound: "alarm", call: true, url: "https://alerts.example.com",
+  });
+  assert.deepEqual(buildTargetInput(draft, telegram, target).config, target.config);
+  assert.deepEqual(buildTargetInput(draft, feishu, target).config, {});
+  draft.chatId = "oc_selected";
+  assert.deepEqual(buildTargetInput(draft, feishuApp, target).config, { chatId: "oc_selected" });
 });
 
 test("空路由组显式提交空列表，caller原样保留，成员去重", () => {

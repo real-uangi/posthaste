@@ -2,7 +2,7 @@
 
 Posthaste 是面向内部业务系统的自托管消息／告警推送中心：通过统一 HTTP API、Shoutrrr Generic Webhook 或 Go SDK 提交消息，再按 caller 目标组推送到一个或多个平台目标。
 
-首版后端、管理后台和独立 Go SDK 已实现。项目尚未部署，SDK 尚未发布版本标签；真实 PostgreSQL、浏览器和飞书／Telegram 联调仍需单独验收。
+首版后端、管理后台和独立 Go SDK 已实现。项目尚未部署，SDK 尚未发布版本标签；真实 PostgreSQL、浏览器和飞书／Telegram／Bark 联调仍需单独验收。
 
 ## 文档导航
 
@@ -20,6 +20,7 @@ Posthaste 是面向内部业务系统的自托管消息／告警推送中心：�
 - caller 选择目标组；缺省或未知 caller 使用默认组，命中空组则明确拒绝。
 - 独立平台账号统一维护凭证，账号下配置群组/话题出口；TG 和飞书企业自建应用账号可有多个出口，飞书群 Webhook 账号对应一个固定群出口。
 - 飞书应用机器人使用 App ID / App Secret，后台从机器人已加入的群列表选择出口，支持刷新和分页加载。
+- Bark 支持官方和自建服务，向设备发送文本/Markdown 通知；可配置分组、通知等级、铃声、30 秒循环响铃和点击跳转。
 - caller 路由组可绑定不同账号下的多个出口。后台提供账号、群组出口、路由组和默认组管理，以单管理员口令登录；出口测试复用正常异步链路。
 - 独立 Go SDK，方便其他 Go 服务发送消息，与 HTTP v1 保持同一协议。
 
@@ -33,7 +34,7 @@ Posthaste 是面向内部业务系统的自托管消息／告警推送中心：�
   → notification 接收用例 → PostgreSQL 配置
   → eventbus 内存队列
   → 固定订阅者 → notification 投递用例
-  → Feishu Sender / Telegram Sender
+  → Feishu Sender / Telegram Sender / Bark Sender
 ```
 
 后端使用 allingo + fx + DDD，划分 notification、auth 两个域，每域按 application/domain/infra 分层。PostgreSQL 只保存账号、出口、路由组及成员配置，凭证以账号为单位加密保存；不装配 Redis、消息中间件、对象存储或定时任务。
@@ -106,7 +107,7 @@ docker run --rm --name posthaste --env-file .env -p 8080:8080 ghcr.io/real-uangi
 
 ## 配置与运行前提
 
-部署需要 PostgreSQL、HTTPS 反向代理，以及到飞书／Telegram 官方 API 的网络连接。默认单实例，后台与 API 同源。关键配置如下：
+部署需要 PostgreSQL、HTTPS 反向代理，以及到所用飞书／Telegram API 或 Bark 服务的网络连接。默认单实例，后台与 API 同源。关键配置如下：
 
 | 配置 | 用途 |
 | --- | --- |
@@ -135,6 +136,20 @@ docker run --rm --name posthaste --env-file .env -p 8080:8080 ghcr.io/real-uangi
 
 服务端通过 [飞书自建应用 OAuth 接口](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/tenant_access_token) 按需获取 tenant_access_token，仅在进程内按凭证版本缓存并提前 60 秒失效，不启动后台刷新或自动重试。应用群列表和消息调用需要允许访问 `accounts.feishu.cn` 及 `open.feishu.cn`；权限和分页依据见 [飞书官方群列表说明](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)。账号保存成功仅表示配置已保存，不代表飞书认证通过。
 
+### Bark 配置
+
+1. 在接收通知的设备安装 Bark 并允许通知，取得设备 Key。每个账号对应一个服务上的设备 Key，多台设备分别配置。
+2. 在 Posthaste 添加 Bark 账号。选择「官方服务」时使用 `https://api.day.app`；选择「自建服务」时填写服务器基础地址，例如 `https://bark.example.com` 或带前缀的 `https://bark.example.com/notify`。发送时自动追加 `/push`，不要粘贴带设备 Key 的完整推送 URL。HTTP 地址仅用于可信内网，外网使用 HTTPS。
+3. 填写 Device Key；自建服务启用 Basic Auth 时填写完整用户名和口令。服务地址、设备 Key 与 Basic Auth 都作为账号凭证加密保存，读取不回显；更换凭证需重新填写完整配置，默认编辑会保留原值。
+4. 在账号下添加出口，按需填写通知分组、等级、铃声、循环响铃及点击跳转地址。一个设备可设置普通提醒、紧急提醒等多个出口；group 是手机通知分组。新出口默认普通通知（active），关闭循环响铃。
+5. 将出口绑定默认或 caller 路由组，再测试发送。反馈「已入队」后到设备确认文字和 Markdown；重要警告（critical）需要在 Bark 授权，循环响铃只播放 30 秒提示音，不会拨打电话。
+
+Bark 通过 APNs 推送，无需常驻 Mac，也无需把 Apple Account 交给 Posthaste；官方服务和自建服务使用同一发送协议。Device Key 通过 `POST /push` JSON 正文提交，Basic Auth 通过 Authorization 请求头提交，不写入 URL。Bark App 的本地历史不等于 Posthaste 消息历史，受理与平台请求成功也不代表用户已收到或已读。
+
+自建 Bark 时需检查其请求日志配置：当前上游服务端的默认日志格式包含请求体，可能记录 Device Key 与消息正文，应关闭或脱敏请求体日志。Posthaste 自身不记录这些内容；JSON 正文传 Key 不代表上游不会留日志。依据见 [Bark 服务端路由配置](https://github.com/Finb/bark-server/blob/master/router.go)。
+
+本次接入文本/Markdown 和上述提醒配置，不开放 Bark 原生加密、图片、通知更新/删除或历史保存期限等额外能力。无需新环境变量、数据库迁移或 Go SDK 改动，不会自动部署 Bark 服务。接口和参数依据见 [Bark 官方教程](https://github.com/Finb/Bark/blob/master/docs/tutorial.md)、[参数说明](https://github.com/Finb/Bark/blob/master/docs/params.md) 与 [服务端 API V2](https://github.com/Finb/bark-server/blob/master/docs/API_V2.md)。
+
 入口 Token、后台口令和凭证主密钥互相独立。不要提交 `.env`；示例文件不会自动创建数据库、生成真实凭证或启动服务。程序需要访问真实依赖，以上部署步骤未作为本地单测执行。
 
 ## 验证范围与后续维护
@@ -144,5 +159,7 @@ docker run --rm --name posthaste --env-file .env -p 8080:8080 ghcr.io/real-uangi
 默认验证使用静态检查、编译、纯单元测试、HTTP recorder、模拟存储及 RoundTripper；存储测试使用无 socket 的 SQL 驱动验证查询、事务与模型声明，不连接 PostgreSQL。真实 PostgreSQL 的迁移、并发行为，浏览器交互和平台实际接收结果仍需另行验收，不以模拟测试替代。
 
 飞书应用机器人的真实凭证获取、权限生效、群列表分页、浏览器选择交互及文本/Markdown 实际接收仍待真实环境验收。文档和模拟协议检查不代表这些项目已通过。
+
+Bark 官方/自建服务、Basic Auth、设备通知权限、浏览器表单交互以及 APNs 实际接收均待真实环境验收；本地模拟检查不代表这些项目已通过。
 
 服务端和 SDK 独立检查；根 `go test ./...` 不覆盖嵌套 SDK 模块。SDK 发布使用 `sdk/go/vX.Y.Z` 标签，不与根服务版本绑定。发布、部署和推送须按单独授权执行。

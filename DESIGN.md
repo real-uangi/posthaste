@@ -4,7 +4,7 @@
 
 ## 1. 定位与边界
 
-Posthaste 是内部自托管、单租户的消息／告警推送中心。多个业务系统提交统一消息，由服务端根据 caller 选择预配置目标组，再推送到一个或多个飞书机器人或 Telegram Bot 目标。
+Posthaste 是内部自托管、单租户的消息／告警推送中心。多个业务系统提交统一消息，由服务端根据 caller 选择预配置目标组，再推送到一个或多个飞书机器人、Telegram Bot 或 Bark 设备目标。
 
 首阶段提供统一 HTTP API、Shoutrrr Generic Webhook 兼容、Go SDK，以及管理平台账号、群组出口和路由组的后台。数据库只保存配置，eventbus 负责进程内异步尽力投递；不建设消息历史、自动重试、幂等去重、持久化队列、重启恢复或最终回执查询。默认单实例，不设计多租户、后台用户账户体系、条件规则引擎、定时触发或高可用调度。平台机器人账号与后台管理员身份互相独立。
 
@@ -35,7 +35,7 @@ internal/
   notification/
     domain/                           # 模型、存储和 Sender 端口
     application/                      # 配置、受理、投递、目标测试用例
-    infra/                            # ORM、凭证加解密、Feishu/Telegram Sender
+    infra/                            # ORM、凭证加解密、平台 Sender
     fx.go
   auth/
     domain/                           # 管理员会话与认证端口
@@ -81,7 +81,7 @@ auth 通过口令验证与会话存储端口实现登录等用例。notification
 
 | 模型 | 必要字段 | 约束 |
 | --- | --- | --- |
-| Account | id、name、platform、enabled、credentialsCiphertext、创建/更新时间 | platform 为 feishu/feishu_app/telegram，创建后不修改 |
+| Account | id、name、platform、enabled、credentialsCiphertext、创建/更新时间 | platform 为 feishu/feishu_app/telegram/bark，创建后不修改 |
 | Target | id、name、accountId、enabled、config、创建/更新时间 | 一个出口属于一个账号，不再持有平台或凭证 |
 | TargetGroup | id、name、caller、创建/更新时间 | UI 称“路由组”；caller 唯一，保留 default |
 | GroupTarget | groupId、targetId | 组合唯一，引用真实组和目标 |
@@ -97,10 +97,11 @@ auth 通过口令验证与会话存储端口实现登录等用例。notification
 | feishu（群 Webhook） | `{}`，每个账号只能一个固定群出口 | webhookUrl、可选 signingSecret |
 | feishu_app（企业自建应用机器人） | chatId（string），每个账号可配置多个群出口 | appId、appSecret |
 | telegram | chatId（string）、可选 messageThreadId（正整数） | botToken |
+| bark | 可选 group、level、sound、call、url；每个账号可配置多个提醒出口 | serverUrl、deviceKey、可选 basicAuth（username/password） |
 
 账号读取只返回 `credentialsConfigured`，不返回密文、明文或凭证掩码。创建账号时凭证必需；更新账号省略整个 credentials 时保留原值，提供时整体替换，不作字段合并。同一账号多个出口共用一份凭证，更新账号即可影响它们的后续受理。出口接口只保存 accountId 和 config，不再接受平台或凭证。
 
-账号平台创建后不可修改；出口可以更换 accountId，并按新账号平台提交完整 config。为确保 Webhook 单出口约束，存储写出口时锁定所选账号，再排除当前出口计数；禁用出口也占名额，第二个返回 409。TG 和飞书应用机器人不设置单出口限制。false、空列表和凭证省略都必须显式处理，不能由 ORM 零值更新规则忽略。
+账号平台创建后不可修改；出口可以更换 accountId，并按新账号平台提交完整 config。为确保 Webhook 单出口约束，存储写出口时锁定所选账号，再排除当前出口计数；禁用出口也占名额，第二个返回 409。TG、飞书应用机器人和 Bark 不设置单出口限制。Bark 一个账号绑定一个服务地址及设备 Key，多个出口可为同一设备设置不同的分组与提醒方式；多设备分别创建账号，再通过路由组组合出口。false、空列表和凭证省略都必须显式处理，不能由 ORM 零值更新规则忽略。
 
 账号停用只影响后续受理，不改写子出口的 enabled。有效出口需同时满足账号和出口启用；恢复账号后，原本启用的出口重新可用。入队快照包含账号 ID、平台、凭证和目的地配置，账号凭证或启停变化不会追溯修改既有快照。
 
@@ -132,6 +133,7 @@ flowchart LR
     Deliver --> Sender[平台 Sender 端口]
     Sender --> Feishu[飞书机器人]
     Sender --> Telegram[Telegram Bot]
+    Sender --> Bark[Bark 设备通知]
 ```
 
 ### 5.1 受理
@@ -170,10 +172,11 @@ eventbus 按运行时函数名识别订阅者，同 topic 的同源闭包/同名
 | 飞书自定义机器人 | text 消息，标题与正文以空行连接 | interactive 卡片 schema 2.0，纯文本标题与 Markdown 正文组件 |
 | 飞书企业自建应用机器人 | 消息 API 的 text，标题与正文以空行连接 | 消息 API 的 interactive，复用卡片 schema 2.0 与 Markdown 正文组件 |
 | Telegram 官方 Bot API | sendMessage，不设置 parse_mode，标题与正文以空行连接 | sendRichMessage，rich_message.markdown；拼接标题时转义其 Markdown 元字符 |
+| Bark | title 与 body 分开提交，title 保持普通文本 | title 与 markdown 分开提交，不同时提交 body |
 
 共同基础语法为 `**粗体**`、`*斜体*`、HTTP(S) 链接、行内/围栏代码、列表和引用。正文由对应平台原生解析，不承诺平台扩展语法或复杂嵌套完全一致；首版不提供原生卡片、附件和按钮载荷接口，也不引入 Markdown 转换依赖。
 
-Sender 使用明确超时的 HTTP client，检查 HTTP 状态和平台业务结果：飞书检查业务 code，Telegram 检查 ok；HTTP 200 但业务失败仍是失败。超出平台限制时仅该目标失败，不截断或拆分以制造部分成功。
+Sender 使用明确超时的 HTTP client，检查 HTTP 状态和平台业务结果：飞书检查业务 code，Telegram 检查 ok，Bark 检查 code 为 200；HTTP 200 但业务失败仍是失败。超出平台限制时仅该目标失败，不截断或拆分以制造部分成功。
 
 飞书凭证在写入时校验官方 HTTPS webhook 地址与路径；设置 signingSecret 时按官方签名规则发送。Telegram 使用固定官方 API 地址，不接受由消息指定的 API Host。平台 raw error、含 token 的 URL 及上游响应正文不能进入日志或返回到 eventbus。
 
@@ -184,6 +187,12 @@ Sender 使用明确超时的 HTTP client，检查 HTTP 状态和平台业务结�
 发送使用 `POST https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id`，Bearer 为 tenant_access_token，`receive_id` 为出口 chatId。`content` 是文本对象或卡片对象序列化后的 JSON 字符串，不能使用 Webhook 的外层 card 形状。检查 HTTP 状态和业务 code；认证、权限、限流和内容错误都仅使本次目标失败，继续其他目标。
 
 群选择通过 `GET https://open.feishu.cn/open-apis/im/v1/chats` 获取机器人已加入的群，固定 `page_size=100`、`sort_type=ByCreateTimeAsc`，按平台返回游标逐页读取，不自动遍历全部群。只返回群名与 chatId，不持久化群列表；群列表不是目标成员有效性的永久证明，保存出口不为此增加一次远程校验。应用需开通 `im:chat:read` 和 `im:message:send_as_bot` 应用身份权限，启用机器人能力并发布、启用应用；机器人须加入目标群且有发言权限。本扩展无数据库迁移或新环境变量，消息入口和 Go SDK 协议保持不变。
+
+`bark` 使用同一 Sender 接口接入官方服务和自建服务。账号的 `serverUrl` 是不含设备 Key 的 HTTP(S) 基础地址，官方地址为 `https://api.day.app`；允许自建服务的路径前缀，发送时在其后追加 `/push`。基础地址不得包含 userinfo、query 或 fragment，显式非法地址报错，不回退官方服务。`deviceKey` 与可选 Basic Auth 用户名/口令作为账号凭证加密保存，仅写不回显。自建服务可使用可信内网 HTTP；外网使用 HTTPS。Basic Auth 通过 Authorization 请求头发送，设备 Key 通过 JSON 正文的 `device_key` 发送，不进入路径或查询参数。
+
+Bark 出口的公开配置仅包含可选 `group`、`level`、`sound`、`call`、`url`。level 取 `active`、`passive`、`timeSensitive`、`critical`；call 为布尔值，提供 true/false 时分别转换为 Bark 的字符串 `"1"`/`"0"`，省略时不发送该字段。后台新建出口默认 active 和 call=false，空的可选字符串省略。group 是设备通知分组，不是聊天群；url 是点击通知后打开的绝对地址，可使用 HTTP(S) 或应用 URL Scheme，不含 userinfo。普通文字和 Markdown 使用已有统一 Message，无需新增平台消息字段。重要警告需要用户在 Bark 授权，call 表示循环响铃 30 秒，不是电话呼叫。
+
+每个 Bark 出口仅执行一次 JSON POST，校验 HTTP 状态与业务 code；响应失败不重试、不拆分、不截断，也不改成纯文本重发。Bark/APNs 的受理不等于用户已收到或已读，Posthaste 的 202 仍只表示本地内存入队。设备端 Bark 历史与 Posthaste 无关。本次只接入上述提醒配置，不开放 Bark 原生加密、图片、通知 ID 更新/删除或历史 TTL；不新增消息表、数据库迁移、环境变量或 SDK 接口。
 
 新增平台只增加对应 infra Sender、fx 注册、账号/出口校验与后台表单，并补充契约和测试；不修改 caller 路由和通用投递循环。新增原生告警入口时，在 adapter 中转换为同一接收命令；没有第二种协议需求前，不增加通用解析器注册框架。
 
@@ -275,4 +284,5 @@ SDK 标签不触发此工作流。为防 GoReleaser 从 `sdk/go/*` 误选 prior 
 - [Beszel Generic](https://beszel.dev/guide/notifications/generic)：JSON title/message、自定义请求头与 query 转发。
 - [飞书卡片与自定义机器人](https://open.feishu.cn/document/feishu-cards/quick-start/send-message-cards-with-custom-bot)、[Telegram Rich Message](https://core.telegram.org/bots/api#rich-message-formatting-options)：平台 Markdown 映射，核对日期 2026-11-15。
 - [飞书自建应用 tenant_access_token](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/tenant_access_token)、[消息内容结构](https://open.feishu.cn/document/server-docs/im-v1/message-content-description/create_json?lang=zh-CN)、[官方群列表说明](https://github.com/larksuite/cli/blob/main/skills/lark-im/references/lark-im-chat-list.md)：应用身份认证、卡片 JSON 字符串和群列表权限/分页，核对日期 2026-11-15。
+- [Bark 调用方式](https://github.com/Finb/Bark/blob/master/docs/tutorial.md)、[参数说明](https://github.com/Finb/Bark/blob/master/docs/params.md)、[服务端 API V2](https://github.com/Finb/bark-server/blob/master/docs/API_V2.md)、[服务端 Basic Auth](https://github.com/Finb/bark-server/blob/master/route_auth.go)：设备正文鉴权、提醒配置与官方/自建服务，核对日期 2026-11-15。
 - [Go Modules 版本规则](https://go.dev/ref/mod#vcs-version)：独立子模块的模块路径和标签前缀。

@@ -18,6 +18,7 @@ import (
 	authinfra "github.com/real-uangi/posthaste/internal/auth/infra"
 	notificationapp "github.com/real-uangi/posthaste/internal/notification/application"
 	"github.com/real-uangi/posthaste/internal/notification/domain"
+	notificationinfra "github.com/real-uangi/posthaste/internal/notification/infra"
 	"github.com/real-uangi/posthaste/internal/shared/config"
 )
 
@@ -172,7 +173,7 @@ func newProtocolHarness(t *testing.T) protocolHarness {
 	store.snapshot = store.routes[0].Targets[0]
 	publisher := &protocolPublisher{}
 	sender := &protocolSender{}
-	notifications, err := notificationapp.NewService(store, publisher, []domain.Sender{sender}, sender, time.Second)
+	notifications, err := notificationapp.NewService(store, publisher, []domain.Sender{sender, notificationinfra.NewBarkSender(&config.Config{SendTimeout: time.Second})}, sender, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

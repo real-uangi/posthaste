@@ -92,3 +92,50 @@ test("编辑应用出口保留未加载到的当前群，允许只更新名称�
   assert.match(html, /保存会保留此群配置/);
   assert.match(html, /<button class="button button-primary" type="submit">保存出口<\/button>/);
 });
+
+test("Bark 账号提供官方及自建服务选择，设备 Key 用密码输入且编辑不回显", () => {
+  const bark: Account = { ...account, platform: "bark", credentialsConfigured: false };
+  const html = renderToStaticMarkup(createElement(AccountEditor, { ...callbacks, account: bark }));
+  assert.match(html, /<option value="bark" selected="">Bark<\/option>/);
+  assert.match(html, /<option value="official" selected="">官方服务<\/option>/);
+  assert.match(html, /<option value="custom">自建服务<\/option>/);
+  assert.match(html, /https:\/\/api.day.app/);
+  assert.match(html, /Device Key/);
+  assert.match(html, /type="password"/);
+  assert.match(html, /每个账号绑定一台 Bark 设备/);
+  const edited = renderToStaticMarkup(createElement(AccountEditor, { ...callbacks, account: { ...bark, credentialsConfigured: true } }));
+  assert.match(edited, /本次保存将保留现有凭证/);
+  assert.equal(edited.includes('type="password"'), false);
+  assert.equal(edited.includes("Device Key"), false);
+});
+
+test("Bark 出口可共享设备账号并配置提醒方式，不展示设备凭证或群参数", () => {
+  const bark: Account = { ...account, platform: "bark" };
+  const html = renderToStaticMarkup(createElement(TargetEditor, {
+    ...callbacks, accounts: [bark], targets: [{ ...target, accountId: bark.id }], initialAccountId: bark.id,
+  }));
+  assert.match(html, /<option value="account-id" selected="">/);
+  assert.match(html, /通知分组/);
+  assert.match(html, /<option value="active" selected="">普通通知<\/option>/);
+  assert.match(html, /循环响铃 30 秒/);
+  assert.match(html, /不会拨打电话/);
+  assert.match(html, /点击跳转地址/);
+  assert.equal(html.includes("已有出口"), false);
+  assert.equal(html.includes("Chat ID"), false);
+  assert.equal(html.includes("Device Key"), false);
+  assert.equal(html.includes('type="password"'), false);
+});
+
+test("Bark 重要警告说明手机授权前提，编辑保留已保存提醒选项", () => {
+  const bark: Account = { ...account, platform: "bark" };
+  const current: Target = { ...target, config: { group: "运维", level: "critical", sound: "alarm", call: true, url: "myapp://alerts" } };
+  const html = renderToStaticMarkup(createElement(TargetEditor, {
+    ...callbacks, accounts: [bark], targets: [current], target: current,
+  }));
+  assert.match(html, /<option value="critical" selected="">重要警告<\/option>/);
+  assert.match(html, /需要在手机端为 Bark 授权/);
+  assert.match(html, /value="运维"/);
+  assert.match(html, /value="alarm"/);
+  assert.match(html, /value="myapp:\/\/alerts"/);
+  assert.match(html, /<input type="checkbox" checked=""\/><span>循环响铃 30 秒/);
+});

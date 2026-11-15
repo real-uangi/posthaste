@@ -1,6 +1,7 @@
 import type {
   Account,
   AccountInput,
+  BarkLevel,
   GroupInput,
   Platform,
   Target,
@@ -18,6 +19,12 @@ export interface AccountDraft {
   botToken: string;
   appId: string;
   appSecret: string;
+  barkService: "official" | "custom";
+  barkServerUrl: string;
+  barkDeviceKey: string;
+  barkBasicAuth: boolean;
+  barkUsername: string;
+  barkPassword: string;
 }
 
 export function accountDraft(account?: Account): AccountDraft {
@@ -31,6 +38,12 @@ export function accountDraft(account?: Account): AccountDraft {
     botToken: "",
     appId: "",
     appSecret: "",
+    barkService: "official",
+    barkServerUrl: "",
+    barkDeviceKey: "",
+    barkBasicAuth: false,
+    barkUsername: "",
+    barkPassword: "",
   };
 }
 
@@ -55,6 +68,14 @@ export function buildAccountInput(
       };
     } else if (platform === "feishu_app") {
       input.credentials = { appId: draft.appId.trim(), appSecret: draft.appSecret.trim() };
+    } else if (platform === "bark") {
+      input.credentials = {
+        serverUrl: draft.barkService === "official" ? "https://api.day.app" : draft.barkServerUrl.trim(),
+        deviceKey: draft.barkDeviceKey.trim(),
+        ...(draft.barkService === "custom" && draft.barkBasicAuth ? {
+          basicAuth: { username: draft.barkUsername.trim(), password: draft.barkPassword },
+        } : {}),
+      };
     } else {
       input.credentials = { botToken: draft.botToken.trim() };
     }
@@ -68,6 +89,11 @@ export interface TargetDraft {
   enabled: boolean;
   chatId: string;
   messageThreadId: string;
+  barkGroup: string;
+  barkLevel: BarkLevel;
+  barkSound: string;
+  barkCall: boolean;
+  barkUrl: string;
 }
 
 export function targetDraft(target?: Target, initialAccountId?: string): TargetDraft {
@@ -77,6 +103,11 @@ export function targetDraft(target?: Target, initialAccountId?: string): TargetD
     enabled: target?.enabled ?? true,
     chatId: target?.config.chatId ?? "",
     messageThreadId: target?.config.messageThreadId?.toString() ?? "",
+    barkGroup: target?.config.group ?? "",
+    barkLevel: target?.config.level ?? "active",
+    barkSound: target?.config.sound ?? "",
+    barkCall: target?.config.call ?? false,
+    barkUrl: target?.config.url ?? "",
   };
 }
 
@@ -97,6 +128,14 @@ export function buildTargetInput(
   if (account.platform === "feishu_app") {
     if (!draft.chatId) throw new Error("请选择飞书机器人已加入的群。");
     input.config.chatId = draft.chatId;
+  } else if (account.platform === "bark") {
+    input.config = {
+      level: draft.barkLevel,
+      call: draft.barkCall,
+      ...(draft.barkGroup.trim() ? { group: draft.barkGroup.trim() } : {}),
+      ...(draft.barkSound.trim() ? { sound: draft.barkSound.trim() } : {}),
+      ...(draft.barkUrl.trim() ? { url: draft.barkUrl.trim() } : {}),
+    };
   } else if (account.platform === "telegram") {
     input.config.chatId = draft.chatId.trim();
     if (draft.messageThreadId !== "") {

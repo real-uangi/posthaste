@@ -49,10 +49,12 @@ export default function AccountEditor({ account, onSaved, onCancel, onUnauthoriz
               <option value="telegram">Telegram Bot</option>
               <option value="feishu">飞书群Webhook</option>
               <option value="feishu_app">飞书应用机器人</option>
+              <option value="bark">Bark</option>
             </select>
           </label>
           {draft.platform === "feishu" && <p className="field-note">一个 Webhook 固定一个飞书群，每个账号只能配置一个群组出口。</p>}
           {draft.platform === "feishu_app" && <p className="field-note">支持国内飞书企业自建应用。先保存账号，再从机器人已加入的群中选择群组出口。</p>}
+          {draft.platform === "bark" && <p className="field-note">每个账号绑定一台 Bark 设备，出口可设置不同分组和提醒方式。</p>}
           <div className="form-section">
             <div className="section-caption"><h3>平台凭证</h3>{account?.credentialsConfigured && <span className="subtle-label">已配置</span>}</div>
             {account?.credentialsConfigured && <label className="check-line"><input type="checkbox" checked={draft.replaceCredentials} onChange={(e) => set("replaceCredentials", e.target.checked)} /><span>更换已保存的凭证</span></label>}
@@ -67,6 +69,20 @@ export default function AccountEditor({ account, onSaved, onCancel, onUnauthoriz
               <label className="field"><span>App ID</span><input required autoComplete="off" value={draft.appId} onChange={(e) => set("appId", e.target.value)} placeholder="填写企业自建应用的 App ID" spellCheck={false} /></label>
               <label className="field"><span>App Secret</span><input required type="password" autoComplete="new-password" value={draft.appSecret} onChange={(e) => set("appSecret", e.target.value)} placeholder="填写应用密钥" spellCheck={false} /></label>
               {account && <p className="field-note">App ID 和 App Secret 将整体替换，请填写完整凭证。</p>}
+            </>}
+            {draft.replaceCredentials && draft.platform === "bark" && <>
+              <label className="field"><span>Bark 服务</span><select value={draft.barkService} onChange={(e) => set("barkService", e.target.value as AccountDraft["barkService"])}><option value="official">官方服务</option><option value="custom">自建服务</option></select></label>
+              {draft.barkService === "official" ? <p className="field-note">使用 https://api.day.app，请填写该服务对应的 Device Key。</p> : <>
+                <label className="field"><span>服务地址</span><input required type="url" autoComplete="off" value={draft.barkServerUrl} onChange={(e) => set("barkServerUrl", e.target.value)} placeholder="https://bark.example.com 或 http://内网地址:端口" spellCheck={false} /></label>
+                <p className="field-note">填写服务基础地址，可带子路径；不要填写 Device Key 或推送路径。HTTP 仅用于可信内网。</p>
+                <label className="check-line"><input type="checkbox" checked={draft.barkBasicAuth} onChange={(e) => set("barkBasicAuth", e.target.checked)} /><span>服务启用了 Basic Auth</span></label>
+                {draft.barkBasicAuth && <>
+                  <label className="field"><span>认证用户名</span><input required autoComplete="off" value={draft.barkUsername} onChange={(e) => set("barkUsername", e.target.value)} spellCheck={false} /></label>
+                  <label className="field"><span>认证密码</span><input required type="password" autoComplete="new-password" value={draft.barkPassword} onChange={(e) => set("barkPassword", e.target.value)} spellCheck={false} /></label>
+                </>}
+              </>}
+              <label className="field"><span>Device Key</span><input required type="password" autoComplete="new-password" value={draft.barkDeviceKey} onChange={(e) => set("barkDeviceKey", e.target.value)} placeholder="填写 Bark App 显示的设备 Key" spellCheck={false} /></label>
+              {account && <p className="field-note">服务地址、Device Key 和可选认证将整体替换，请重新填写完整配置。</p>}
             </>}
             {account && draft.replaceCredentials && <p className="field-note warning-text">保存后，此账号下的所有群组出口都将使用新凭证。</p>}
           </div>

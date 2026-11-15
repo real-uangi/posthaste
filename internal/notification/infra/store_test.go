@@ -250,8 +250,8 @@ func TestTargetCanRebindWithoutMutatingAccountCredentials(t *testing.T) {
 	}
 }
 
-func TestAppAccountsAllowSeveralExits(t *testing.T) {
-	for _, platform := range []string{"telegram", "feishu_app"} {
+func TestAccountsAllowSeveralExits(t *testing.T) {
+	for _, platform := range []string{"telegram", "feishu_app", "bark"} {
 		t.Run(platform, func(t *testing.T) {
 			accountID := uuid.NewString()
 			var steps []sqlStep
@@ -263,7 +263,11 @@ func TestAppAccountsAllowSeveralExits(t *testing.T) {
 			}
 			store, script := testStore(t, steps...)
 			for _, chatID := range []string{"one", "two"} {
-				target, err := store.SaveTarget(context.Background(), domain.SaveTarget{AccountID: accountID, Name: "exit", Enabled: true, Config: json.RawMessage(`{"chatId":"` + chatID + `"}`)})
+				config := json.RawMessage(`{"chatId":"` + chatID + `"}`)
+				if platform == "bark" {
+					config = json.RawMessage(`{"group":"` + chatID + `","level":"active","call":false}`)
+				}
+				target, err := store.SaveTarget(context.Background(), domain.SaveTarget{AccountID: accountID, Name: "exit", Enabled: true, Config: config})
 				if err != nil || target.AccountID != accountID {
 					t.Fatalf("shared bot failed: %v", err)
 				}

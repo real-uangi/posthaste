@@ -4,8 +4,8 @@ import { api, APIError, errorMessage } from "./api.js";
 import { Notice } from "./components.js";
 import { buildTargetInput, feishuAccountOccupied, targetDraft } from "./forms.js";
 import type { TargetDraft } from "./forms.js";
-import { platformLabels } from "./types.js";
-import type { Account, AccountChatPage, Target } from "./types.js";
+import { barkLevelLabels, platformLabels } from "./types.js";
+import type { Account, AccountChatPage, BarkLevel, Target } from "./types.js";
 
 export default function TargetEditor({ target, accounts, targets, initialAccountId, onSaved, onCancel, onUnauthorized }: {
   target?: Target;
@@ -59,7 +59,7 @@ export default function TargetEditor({ target, accounts, targets, initialAccount
     setChatPage({ items: [], hasMore: false, nextPageToken: "" });
     setChatError(null);
     setChatLoading(accounts.some((item) => item.id === accountId && item.platform === "feishu_app"));
-    setDraft((current) => ({ ...current, accountId, chatId: "", messageThreadId: "" }));
+    setDraft((current) => ({ ...targetDraft(undefined, accountId), name: current.name, enabled: current.enabled }));
   }
   function set<K extends keyof TargetDraft>(key: K, value: TargetDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -105,6 +105,16 @@ export default function TargetEditor({ target, accounts, targets, initialAccount
             <div className="section-caption"><h3>群组与话题</h3></div>
             <label className="field"><span>Chat ID</span><input required value={draft.chatId} onChange={(e) => set("chatId", e.target.value)} placeholder="群组、频道或用户的 Chat ID" spellCheck={false} /></label>
             <label className="field"><span>话题 ID <small>可选</small></span><input type="number" min="1" step="1" value={draft.messageThreadId} onChange={(e) => set("messageThreadId", e.target.value)} placeholder="仅发送到指定话题时填写" /></label>
+          </div>}
+          {account?.platform === "bark" && <div className="form-section">
+            <div className="section-caption"><h3>Bark 提醒方式</h3></div>
+            <label className="field"><span>通知分组 <small>可选</small></span><input value={draft.barkGroup} onChange={(e) => set("barkGroup", e.target.value)} placeholder="例如：运维告警" /></label>
+            <label className="field"><span>通知等级</span><select value={draft.barkLevel} onChange={(e) => set("barkLevel", e.target.value as BarkLevel)}>{Object.entries(barkLevelLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            {draft.barkLevel === "critical" && <p className="field-note">重要警告需要在手机端为 Bark 授权「重要警告」。</p>}
+            <label className="field"><span>铃声 <small>可选</small></span><input value={draft.barkSound} onChange={(e) => set("barkSound", e.target.value)} placeholder="填写 Bark 内的铃声名称，留空使用默认铃声" spellCheck={false} /></label>
+            <label className="check-line"><input type="checkbox" checked={draft.barkCall} onChange={(e) => set("barkCall", e.target.checked)} /><span>循环响铃 30 秒</span></label>
+            <p className="field-note">循环响铃会重复播放通知提示音，不会拨打电话。</p>
+            <label className="field"><span>点击跳转地址 <small>可选</small></span><input value={draft.barkUrl} onChange={(e) => set("barkUrl", e.target.value)} placeholder="https://example.com 或 App URL Scheme" spellCheck={false} /></label>
           </div>}
           {appAccountId && <div className="form-section">
             <div className="section-caption"><h3>飞书群</h3><button className="text-button" type="button" disabled={chatLoading} onClick={() => void loadChats(appAccountId)}>刷新群列表</button></div>
