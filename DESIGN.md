@@ -1,12 +1,12 @@
 # Posthaste 系统设计
 
-本文定义首阶段开发目标。截至 2026-11-15，仓库只有架构与规范文档，服务端、管理后台和 Go SDK 均未实现，也没有已部署实例。工程约束见 [AGENTS.md](AGENTS.md)，HTTP 与 SDK 契约分别见 [API.md](docs/API.md) 和 [GO_SDK.md](docs/GO_SDK.md)。
+本文定义 Posthaste 首版实现的架构约束。工程规范见 [AGENTS.md](AGENTS.md)，HTTP 与 SDK 契约分别见 [API.md](docs/API.md) 和 [GO_SDK.md](docs/GO_SDK.md)。源码、构建及真实环境验收状态分别记录，不能由架构描述推定已部署。
 
 ## 1. 定位与边界
 
 Posthaste 是内部自托管、单租户的消息／告警推送中心。多个业务系统提交统一消息，由服务端根据 caller 选择预配置目标组，再推送到一个或多个飞书机器人或 Telegram Bot 目标。
 
-首阶段提供统一 HTTP API、Shoutrrr Generic Webhook 兼容、Go SDK，以及管理目标和目标组的后台。数据库只保存配置，eventbus 负责进程内异步尽力投递；不建设消息历史、自动重试、幂等去重、持久化队列、重启恢复或最终回执查询。默认单实例，不设计多租户、账户体系、条件规则引擎、定时触发或高可用调度。
+首阶段提供统一 HTTP API、Shoutrrr Generic Webhook 兼容、Go SDK，以及管理平台账号、群组出口和路由组的后台。数据库只保存配置，eventbus 负责进程内异步尽力投递；不建设消息历史、自动重试、幂等去重、持久化队列、重启恢复或最终回执查询。默认单实例，不设计多租户、后台用户账户体系、条件规则引擎、定时触发或高可用调度。平台机器人账号与后台管理员身份互相独立。
 
 “支持扩展”指新增协议适配器或平台 Sender 可以接入既有用例，不表示首版预先实现所有插件、抽象或协议。
 
@@ -18,13 +18,13 @@ Posthaste 是内部自托管、单租户的消息／告警推送中心。多个�
 | HTTP | allingo 提供的 Gin | 协议、认证、API 和静态资源 |
 | 业务组织 | DDD 分层单体 | 领域模型、应用编排、基础设施端口 |
 | 内部异步 | `github.com/real-uangi/eventbus` | 单进程内存队列与固定订阅者 |
-| 配置存储 | allingo DB、GORM、PostgreSQL | 目标、目标组与关联 |
+| 配置存储 | allingo DB、GORM、PostgreSQL | 账号、出口、路由组与关联 |
 | 后台 | React、TypeScript、Vite、Tailwind CSS、pnpm | 单一同源 SPA，构建资源嵌入 Go |
 | Go SDK | 同仓独立 Go module，仅标准库 | 公开 HTTP v1 消息客户端 |
 
-架构参考 Icebreaker 的模块装配和分层规范，不复制其计费、用户、Edge、多站点、定时任务或视觉设计。调研基线为 allingo `v0.1.14`、fx `v1.24.0`；eventbus 采用具备 `Close(context.Context)` 的版本，已核对提交为 `7eee93697032364d93e50e57bc6b16890c8b1e39`。这些是后续初始化依赖的依据，不代表仓库已有 `go.mod`；不能照搬 Icebreaker 缺少 Close 的旧 eventbus 依赖。
+架构参考 Icebreaker 的模块装配和分层规范，不复制其计费、用户、Edge、多站点、定时任务或视觉设计。根模块固定 allingo `v0.1.14`、fx `v1.24.0`；eventbus 固定具备 `Close(context.Context)` 的 `v0.0.0-20261111004406-7eee93697032`。不能照搬 Icebreaker 缺少 Close 的旧 eventbus 依赖。
 
-以下是计划目录，不在文档阶段创建：
+源码目录如下：
 
 ```text
 main.go / main_test.go                 # appOptions、fx.ValidateApp
@@ -60,12 +60,12 @@ docs/                                 # HTTP 与 Go SDK 契约
 | --- | --- | --- |
 | HTTP / event adapter | 协议转换、外部边界校验、触发用例 | 组路由规则、数据库和平台 IO |
 | application | 受理、组选择、目标展开、投递及配置用例编排 | SQL、GORM、HTTP client、存储算法 |
-| domain | Message、Target、TargetGroup、不变量及所需端口 | Gin、GORM、fx、平台 SDK |
+| domain | Message、Account、Target、TargetGroup、不变量及所需端口 | Gin、GORM、fx、平台 SDK |
 | infra | 事务、ORM、加解密、平台 HTTP、内存会话 | 决定 caller 回退和跨域业务策略 |
 
 notification 定义配置存储端口、消息发布端口和 `Sender` 端口。存储实现返回路由所需配置及完整目标快照；发布实现封装 eventbus；平台 Sender 负责平台配置校验、载荷编码和一次发送。应用层不直接依赖 eventbus 库类型或具体 Sender。
 
-`Sender` 以平台类型提供能力：校验本平台配置／凭证，以及 `Send(ctx, targetSnapshot, message) error`。通过 fx value group `notification_senders` 收集后，构造按平台类型查找的索引；不依赖 group 顺序，重复类型启动失败。配置写入时完成平台配置校验，发送时仅解码可信配置和处理外部平台响应，不逐层重复校验。
+`Sender` 以平台类型提供 `ValidateAccount(credentials)`、`ValidateTarget(config)` 和 `Send(ctx, targetSnapshot, message) error`。通过 fx value group `notification_senders` 收集后，构造按平台类型查找的索引；不依赖 group 顺序，重复类型启动失败。账号写入校验新凭证，出口写入根据所选账号的平台校验群组配置；发送时仅解码可信快照和处理外部平台响应，不逐层重复校验。
 
 auth 通过口令验证与会话存储端口实现登录等用例。notification 与 auth 之间没有业务调用；HTTP 适配器先完成管理员会话认证，再调用配置用例。
 
@@ -79,20 +79,29 @@ auth 通过口令验证与会话存储端口实现登录等用例。notification
 
 | 模型 | 必要字段 | 约束 |
 | --- | --- | --- |
-| Target | id、name、platform、enabled、config、credentialsCiphertext、创建/更新时间 | platform 首版为 feishu/telegram，创建后不修改 |
-| TargetGroup | id、name、caller、创建/更新时间 | caller 唯一，保留 default |
+| Account | id、name、platform、enabled、credentialsCiphertext、创建/更新时间 | platform 为 feishu/telegram，创建后不修改 |
+| Target | id、name、accountId、enabled、config、创建/更新时间 | 一个出口属于一个账号，不再持有平台或凭证 |
+| TargetGroup | id、name、caller、创建/更新时间 | UI 称“路由组”；caller 唯一，保留 default |
 | GroupTarget | groupId、targetId | 组合唯一，引用真实组和目标 |
 
-首版采用配置实体的硬删除。删除组时在同一事务清除其成员；被引用目标禁止删除。存储实现以声明的引用约束及事务维护关系，删除与绑定并发也不能产生悬空关联。不增加软删除历史、版本快照表或配置缓存。
+账号与出口是一对多关系，路由组与出口是多对多关系：`Account → Target ← GroupTarget → TargetGroup`。不额外建立平台 Chat 表；同一个实际群由不同账号发送时，是各自账号下的不同出口。
 
-目标的公开 config 与仅写 credentials 分开：
+首版采用配置实体的硬删除。删除路由组时在同一事务清除其成员；被路由组引用的出口禁止删除，被任何出口引用的账号也禁止删除（含已禁用出口）。Account→Target 和路由组成员均声明 FK RESTRICT。存储实现以引用约束及事务维护关系，删除与绑定并发也不能产生悬空关联。不增加软删除历史、版本快照表或配置缓存。
 
-| 平台 | 公开 config | 仅写 credentials |
+平台凭证属于账号，公开目的地 config 属于出口：
+
+| 账号平台 | 出口公开 config | 账号仅写 credentials |
 | --- | --- | --- |
-| feishu | `{}` | webhookUrl、可选 signingSecret |
+| feishu（群 Webhook） | `{}`，每个账号只能一个固定群出口 | webhookUrl、可选 signingSecret |
 | telegram | chatId（string）、可选 messageThreadId（正整数） | botToken |
 
-读取接口只返回 `credentialsConfigured`，不返回密文、明文或凭证掩码。创建时凭证必需；更新省略整个 credentials 时保留原值，提供时整体替换，不作字段合并。是否启用及空目标列表必须显式持久化，不能由 ORM 零值更新规则忽略。
+账号读取只返回 `credentialsConfigured`，不返回密文、明文或凭证掩码。创建账号时凭证必需；更新账号省略整个 credentials 时保留原值，提供时整体替换，不作字段合并。同一账号多个出口共用一份凭证，更新账号即可影响它们的后续受理。出口接口只保存 accountId 和 config，不再接受平台或凭证。
+
+账号平台创建后不可修改；出口可以更换 accountId，并按新账号平台提交完整 config。为确保 Webhook 单出口约束，存储写出口时锁定所选账号，再排除当前出口计数；禁用出口也占名额，第二个返回 409。TG 不设置单出口限制。false、空列表和凭证省略都必须显式处理，不能由 ORM 零值更新规则忽略。
+
+账号停用只影响后续受理，不改写子出口的 enabled。有效出口需同时满足账号和出口启用；恢复账号后，原本启用的出口重新可用。入队快照包含账号 ID、平台、凭证和目的地配置，账号凭证或启停变化不会追溯修改既有快照。
+
+本次是未发布首版的配置 schema 调整，不提供旧目标凭证的自动回填或双写。若已使用旧 schema，需显式迁移配置，并将旧密文解密后以账号 ID 重新加密；AutoMigrate 不能代替数据迁移，也不能直接搬用旧密文。
 
 ### 4.2 默认组和路由
 
@@ -100,9 +109,9 @@ auth 通过口令验证与会话存储端口实现登录等用例。notification
 
 caller 是区分大小写的配置键，按 query 解码后的字符串精确匹配；缺省或空字符串使用默认组，非空但不存在也使用默认组。不将其转换为用户名，不推导第三方协议，不自动创建组。
 
-命中已存在组时，只选择该组启用目标；即使一个目标也没有，也不能再转投默认组。默认组本身没有可用目标同样返回 503。组成员去重，数组顺序不定义投递优先级；快照按目标 ID 稳定展开，平台调用顺序不构成对外顺序保证。
+命中已存在组时，只选择该组中“账号和出口都启用”的目标；即使一个目标也没有，也不能再转投默认组。默认组本身没有可用目标同样返回 503。组成员去重，数组顺序不定义投递优先级；快照按目标 ID 稳定展开，平台调用顺序不构成对外顺序保证。
 
-每次受理从数据库读取组和成员的同一一致视图，避免多次查询在配置并发更新时拼接出半新半旧的组；可使用单次关联查询完成。配置提交后对后续受理生效，不维护需要失效同步的内存缓存。
+每次受理通过单次关联查询读取路由组、成员、出口和账号的同一一致视图，避免配置并发更新时拼接半新半旧的凭证与目的地。配置提交后对后续受理生效，不维护需要失效同步的内存缓存。
 
 ## 5. 消息链路与可靠性
 
@@ -131,7 +140,7 @@ flowchart LR
 
 事件发布后，所有 slice、map、字节缓冲及凭证引用不得复用为可变对象。HTTP 请求结束不取消已受理的投递；handler 为平台请求建立独立且有超时的 context，不能继续持有 Gin Context 或已取消的请求 context。
 
-目标测试用例先校验管理员指定目标存在且启用，再复用上述快照与发布步骤，仅包含该目标。它不经过 caller 路由，也不绕过开关，不另建同步发送通道。
+目标测试用例先校验管理员指定出口存在且账号和出口都启用，再复用上述快照与发布步骤，仅包含该出口。它不经过 caller 路由，也不绕过父子开关，不另建同步发送通道。
 
 ### 5.2 执行
 
@@ -164,11 +173,13 @@ Sender 使用明确超时的 HTTP client，检查 HTTP 状态和平台业务结�
 
 飞书凭证在写入时校验官方 HTTPS webhook 地址与路径；设置 signingSecret 时按官方签名规则发送。Telegram 使用固定官方 API 地址，不接受由消息指定的 API Host。平台 raw error、含 token 的 URL 及上游响应正文不能进入日志或返回到 eventbus。
 
-新增平台只增加对应 infra Sender、fx 注册、配置校验与后台表单，并补充契约和测试；不修改 caller 路由和通用投递循环。新增原生告警入口时，在 adapter 中转换为同一接收命令；没有第二种协议需求前，不增加通用解析器注册框架。
+当前飞书类型是固定群 Webhook，不能通过新增 chatId 跨群。后续飞书应用机器人将作为独立平台 Sender 接入：账号保存应用身份和凭证，出口保存 chatId；本次不实现应用 API、访问令牌管理或群自动发现。
+
+新增平台只增加对应 infra Sender、fx 注册、账号/出口校验与后台表单，并补充契约和测试；不修改 caller 路由和通用投递循环。新增原生告警入口时，在 adapter 中转换为同一接收命令；没有第二种协议需求前，不增加通用解析器注册框架。
 
 ## 7. 后台、认证与凭证
 
-后台提供登录、目标列表/编辑、组列表/编辑、默认组配置及目标测试。只有管理员一种身份，无用户表、角色权限、注册、配额或计费。测试操作显示“已入队，请在目标平台确认”，不展示虚构投递记录。管理接口和安全错误状态以 API 文档为准。
+后台提供登录、账号列表/编辑、账号下的群组出口、路由组、默认路由组配置及出口测试。只有管理员一种身份，无用户表、角色权限、注册、配额或计费。出口编辑选择账号，只填写目的地；凭证统一在账号中维护。测试操作显示“已入队，请在目标平台确认”，不展示虚构投递记录。管理接口和安全错误状态以 API 文档为准。
 
 后台使用环境口令；验证实现避免将原始口令写入持久化、日志或错误，比较使用固定长度摘要的常量时间比较。登录生成高熵随机 opaque session ID，服务端仅在内存中保存其摘要和到期时间；固定 12 小时到期，不滑动续期。过期会话在访问或登录清理时移除，不创建常驻清理任务。退出撤销会话，重启清空会话。
 
@@ -176,7 +187,7 @@ Cookie 名为 `posthaste_session`，HttpOnly、SameSite=Lax、Path=/api/v1/admin
 
 入口仅接受 `POSTHASTE_INGRESS_TOKEN` 的 Bearer，不接受管理 Cookie、后台口令或 query Token。持有入口 Token 的内部服务可以选择任意 caller，caller 不构成权限隔离。
 
-平台 credentials 在 infra 通过 AES-GCM 加密，使用随机 nonce，密文携带解密所需 nonce，目标 ID 作为附加认证数据。主密钥由环境提供，不入库。修改主密钥不能直接解密已有凭证，需显式运维重加密或重新配置，不尝试旧密钥/空密钥兜底。明文只存在于校验、加密及投递所需内存中；整个加解密算法不进入应用层。
+账号 credentials 在 infra 通过 AES-GCM 加密，使用随机 nonce，密文携带解密所需 nonce，账号 ID 作为附加认证数据。主密钥由环境提供，不入库。修改主密钥不能直接解密已有凭证，需显式运维重加密或重新配置，不尝试旧密钥/空密钥兜底。明文只存在于校验、加密及投递所需内存中；整个加解密算法不进入应用层。
 
 allingo 默认数据库日志可能展开 SQL，故 credentials 在进入 ORM 前已为密文；禁止把明文写入临时列、SQL 条件或 ORM 调试日志。平台网络错误必须先映射为安全 reason，再交给业务或 eventbus 日志。
 
@@ -212,7 +223,7 @@ SDK 的路径前缀支持只表示其能调用网关转发的带前缀地址，�
 
 ### 8.3 可观测性
 
-受理和逐目标日志使用稳定字段：messageId、callerRequested、callerResolved、fallback、targetId、platform、outcome、reason、elapsedMs。记录未知 caller 进入默认组的事实，不能将其记成正常命中；不输出正文、平台凭证、Cookie、Authorization 或完整 webhook URL。
+受理和逐目标日志使用稳定字段：messageId、callerRequested、callerResolved、fallback、accountId、targetId、platform、outcome、reason、elapsedMs。记录未知 caller 进入默认组的事实，不能将其记成正常命中；不输出正文、平台凭证、Cookie、Authorization 或完整 webhook URL。
 
 区分请求受理/拒绝与平台成功/失败；可通过计数和耗时指标观察，指标标签仅采用平台、结果等有限值，不把 messageId 或任意 caller 作为标签。eventbus 不直接提供的持久状态或队列观测不能虚构成已实现监控能力。
 
@@ -220,7 +231,7 @@ SDK 的路径前缀支持只表示其能调用网关转发的带前缀地址，�
 
 Go SDK 为 `sdk/go` 独立模块，仅标准库，使用公开 HTTP 协议，不导入服务端代码；具体 Config、SendRequest、Acceptance、APIError 和错误链以 SDK 文档为准。默认 10 秒 HTTP 超时，无自动重试，仅合法 202 返回受理结果；客户端取消或超时不能推断服务端未受理。
 
-后续开发依次完成：
+首版实现按以下顺序组织：
 
 1. 根模块及 fx 装配、配置解析、纯装配检查；接入 allingo 和支持 Close 的 eventbus。
 2. 配置模型/事务/凭证存储、默认组初始化、管理员会话和管理 API。
@@ -230,7 +241,7 @@ Go SDK 为 `sdk/go` 独立模块，仅标准库，使用公开 HTTP 协议，不
 
 默认验证使用内存 fake、模拟 RoundTripper、HTTP recorder 和 `fx.ValidateApp`。重点覆盖 caller 各分支、目标去重与空组、凭证省略更新、并发配置一致性、快照隔离、逐目标失败继续、平台业务失败、队列关闭、会话和脱敏。SDK 必须在自己的模块中独立测试；嵌套模块不会被根 `go test ./...` 覆盖。
 
-所有消息入口变更同步检查 API、SDK、示例和测试；目标平台扩展同步检查 Sender、fx 注册、后台配置表单及平台文档。本次文档验收只检查链接、示例与契约一致性，不声称已通过编译、数据库或平台验收。
+所有消息入口变更同步检查 API、SDK、示例和测试；目标平台扩展同步检查 Sender、fx 注册、后台配置表单及平台文档。纯单元测试与编译不替代 PostgreSQL、浏览器和真实平台验收；具体执行状态见 README 及交付记录。
 
 ## 10. 依据与参考
 

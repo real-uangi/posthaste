@@ -1,10 +1,12 @@
 # Go SDK 设计与使用规范
 
-本文定义 Posthaste Go SDK 的目标接口、HTTP 行为和独立模块约束。**当前项目仅完成设计，SDK 尚未实现；下文代码是目标 API 的使用示例，不能视为已有可安装版本。**
+本文定义 Posthaste Go SDK 的公开接口、HTTP 行为和独立模块约束。SDK 源码位于 `sdk/go`；尚未发布版本标签，使用示例以源码接口为准，不能把计划版本视为已发布包。
 
 ## 1. 定位与模块边界
 
 SDK 只负责通过 Posthaste HTTP v1 接口发送消息，不提供管理后台 CRUD、飞书或 Telegram 的直接调用、平台格式转换、异步队列、自动重试、幂等、恢复或日志框架。鉴权、caller 路由、目标选择及业务参数校验由服务端负责。
+
+平台账号与群组出口由后台统一维护。账号拆分不改变 SDK 的发送接口：调用方仍提交消息和可选 caller，不传平台凭证、账号 ID 或群组 ID。
 
 - 同仓放置于 `sdk/go/`，拥有独立 `go.mod`。
 - module：`github.com/real-uangi/posthaste/sdk/go`；package：`posthaste`。
@@ -108,9 +110,9 @@ SDK 只解析本用例使用的 `code`、`data` 和成功结果中的 `messageId
 
 **202 只代表服务端已将消息放入本进程内存队列。** `MessageID` 用于关联日志，不代表最终投递成功，也不是可查询投递历史的承诺。SDK 不等待飞书或 Telegram 接收结果；服务端重启、进程退出或后续发送失败均不会触发 SDK 自动补发。调用方也不能从网络超时推断服务端一定未接收，重提可能重复推送。
 
-## 4. 目标 API 使用示例
+## 4. 使用示例
 
-以下完整示例展示默认组发送、caller 路由、Markdown、context 取消和错误分类。SDK 实现并发布后才可编译使用；示例不会执行任何后台管理操作。
+以下完整示例展示默认组发送、caller 路由、Markdown、context 取消和错误分类。发布前可在调用方通过本地 module replace 引用本仓库 SDK；示例不执行后台管理操作。
 
 ```go
 package main
@@ -217,7 +219,7 @@ GOWORK=off go test -race ./...
 GOWORK=off go vet ./...
 ```
 
-根目录的 `go test ./...` 不覆盖独立子模块，CI 必须单独检查 SDK。当前文档阶段不执行这些尚无实现的检查，也不据此声明测试通过。
+根目录的 `go test ./...` 不覆盖独立子模块，CI 使用独立 job 检查 SDK。纯单元测试不连接服务端或平台，具体执行结果见交付记录。
 
 SDK 面向服务端 HTTP v1 协议。已有 v1 服务端不应因 SDK 的兼容更新而要求新增字段或改变发送语义；可增加可选能力和响应字段，破坏性 HTTP 变更进入新的协议版本。
 
@@ -227,4 +229,4 @@ SDK 面向服务端 HTTP v1 协议。已有 v1 服务端不应因 SDK 的兼容�
 go get github.com/real-uangi/posthaste/sdk/go@v0.1.0
 ```
 
-SDK 版本与服务端发布版本分别管理，以 HTTP v1 契约保持兼容。当前工作不创建 tag、不推送、不发布包。
+SDK 版本与服务端发布版本分别管理，以 HTTP v1 契约保持兼容。发布需单独授权，当前尚未创建 SDK tag 或发布包。

@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+/bin/
+/web/node_modules/
+/web/dist/
+/web/.test-dist/
+/web/*.tsbuildinfo
+/coverage.out
+/sdk/go/coverage.out
+.DS_Store

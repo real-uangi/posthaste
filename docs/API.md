@@ -1,6 +1,6 @@
 # Posthaste HTTP API
 
-本文定义 Posthaste 首版的 HTTP 契约，供消息调用方、管理后台和 Go SDK 共用。它描述计划实现的接口，不代表当前空白项目已经提供这些能力。
+本文定义 Posthaste 首版实现的 HTTP 契约，供消息调用方、管理后台和 Go SDK 共用。接口实现与本地协议测试不代表服务已经部署或完成真实平台联调。
 
 ## 1. 通用约定
 
@@ -58,9 +58,9 @@
 ### 2.2 caller 与目标组
 
 - `caller` 区分大小写，按 query 解码后的字符串原样精确匹配，不做 trim 或大小写转换。
-- `caller` 命中已配置目标组时，使用该组中已启用的目标。
+- `caller` 命中已配置目标组时，使用该组中账号和出口均启用的目标。目标组在后台称为“路由组”，不是飞书/TG 的实际聊天群。
 - `caller` 缺省、为空或未知时，使用 `caller=default` 的默认组。这是明确的默认路由行为，不返回“未知 caller”错误。
-- 已命中组为空，或成员全部禁用时，返回 `503`，**不再回退到默认组**。
+- 已命中组为空，或成员因账号/出口禁用而全部不可用时，返回 `503`，**不再回退到默认组**。
 - 默认组没有可用目标时同样返回 `503`。
 - 目标成员去重，同一目标不会因为重复成员而重复投递。不同目标即使属于同一平台，也各自尝试投递。
 
@@ -159,12 +159,62 @@ Content-Type: application/json
 }
 ```
 
-### 3.2 推送目标
+### 3.2 平台账号
+
+账号保存平台身份及凭证，旗下出口保存接收群或话题。管理后台只有一个管理员身份；这里的账号专指平台机器人账号，不是后台登录用户。
 
 | 方法 | 路径（相对管理前缀） | 请求/用途 | 成功响应 data |
 | --- | --- | --- | --- |
-| GET | `/targets/list` | 列出全部配置目标，无分页 | `{items:[Target]}` |
-| POST | `/targets/save` | 创建或整体更新目标配置 | `Target` |
+| GET | `/accounts/list` | 列出全部账号，无分页 | `{items:[Account]}` |
+| POST | `/accounts/save` | 创建或整体更新账号 | `Account` |
+| POST | `/accounts/delete` | `{id}` | `null` |
+
+账号的公开形状：
+
+```json
+{
+  "id": "bc355f42-2802-4243-85b6-a53fc41e8751",
+  "name": "运维 Telegram Bot",
+  "platform": "telegram",
+  "enabled": true,
+  "credentialsConfigured": true
+}
+```
+
+`accounts/save` 必须提供 `name`、`platform`、`enabled`。省略 `id` 创建，提供 `id` 更新；`platform` 仅接受 `telegram` / `feishu`，创建后不可修改。
+
+创建账号必须提供 `credentials`；更新省略整个字段保留原值，提供则整体替换，不按内部字段合并。无效凭证、平台不支持或修改平台返回 `400`；更新不存在的 ID 返回 `404`。读取账号永远不返回凭证明文、密文或掩码，`credentialsConfigured` 也不代表已完成平台认证或投递成功。
+
+| 账号平台 | credentials（仅写） | 旗下出口 |
+| --- | --- | --- |
+| `telegram` | `{botToken:string}` | 多个 Chat ID / 可选话题 |
+| `feishu`（群 Webhook） | `{webhookUrl:string,signingSecret?:string}` | 最多一个固定群出口，包括已禁用出口 |
+
+Telegram 账号创建示例：
+
+```json
+{
+  "name": "运维 Telegram Bot",
+  "platform": "telegram",
+  "enabled": true,
+  "credentials": {
+    "botToken": "<Bot token>"
+  }
+}
+```
+
+飞书账号使用 `platform="feishu"`，凭证为 `{"webhookUrl":"https://open.feishu.cn/open-apis/bot/v2/hook/<机器人标识>","signingSecret":"<签名密钥>"}`；未开启签名时省略 signingSecret。更新提供完整凭证但省略签名密钥，表示移除原签名配置。
+
+同一账号的多个出口共享一份凭证；凭证修改对后续受理生效，不追溯改变已入队快照。账号停用时所有子出口暂停受理，但出口自身 enabled 保持原值。被任何出口引用的账号都不可删除，返回 `409`，包括仅有已禁用出口的情况。
+
+当前飞书类型是单群自定义 Webhook，不接收 App ID/App Secret，也不能配置多个 chatId。飞书应用机器人作为后续独立接入类型实现，本次没有增加其管理字段或发送 API。
+
+### 3.3 群组出口（推送目标）
+
+| 方法 | 路径（相对管理前缀） | 请求/用途 | 成功响应 data |
+| --- | --- | --- | --- |
+| GET | `/targets/list` | 列出全部出口，无分页 | `{items:[Target]}` |
+| POST | `/targets/save` | 创建或整体更新出口配置 | `Target` |
 | POST | `/targets/delete` | `{id}` | `null` |
 | POST | `/targets/test` | `{id,title?,message,format?}` | `202`，`{messageId}` |
 
@@ -173,45 +223,47 @@ Content-Type: application/json
 ```json
 {
   "id": "a6f0e5f9-4eb8-4791-b2b3-91555592cd54",
-  "name": "运维飞书群",
-  "platform": "feishu",
+  "name": "Telegram 运维群",
+  "accountId": "bc355f42-2802-4243-85b6-a53fc41e8751",
   "enabled": true,
-  "config": {},
-  "credentialsConfigured": true
-}
-```
-
-返回对象永远不包含 `credentials`。`credentialsConfigured` 仅说明已经配置凭证，不代表经过平台认证或最近投递成功。
-
-`targets/save` 的 `name`、`platform`、`enabled`、`config` 必填。省略 `id` 创建，提供 `id` 更新已有目标；`platform` 仅接受 `feishu` / `telegram`，创建后不可修改。
-
-创建必须提供 `credentials`；更新省略 `credentials` 保留原值，提供则整体替换，不按内部字段合并，也不接受前端掩码作为真实凭证。配置无效、平台不支持或试图修改平台返回 `400`。更新不存在的 ID 返回 `404`。
-
-| 平台 | config | credentials（仅写） |
-| --- | --- | --- |
-| `feishu` | `{}` | `{webhookUrl:string,signingSecret?:string}` |
-| `telegram` | `{chatId:string,messageThreadId?:正整数}` | `{botToken:string}` |
-
-飞书目标的创建示例：
-
-```json
-{
-  "name": "运维飞书群",
-  "platform": "feishu",
-  "enabled": true,
-  "config": {},
-  "credentials": {
-    "webhookUrl": "https://open.feishu.cn/open-apis/bot/v2/hook/<机器人标识>",
-    "signingSecret": "<签名密钥>"
+  "config": {
+    "chatId": "-1001234567890"
   }
 }
 ```
 
-Telegram 目标使用 `platform="telegram"`，配置示例为 `{"chatId":"-1001234567890","messageThreadId":123}`，凭证为 `{"botToken":"<Bot token>"}`；无需话题时省略 `messageThreadId`。更新时若只修改名称、开关或 config，省略整个 `credentials` 字段即可保留原凭证。
+出口不再持有 `platform`、`credentials` 或 `credentialsConfigured`；平台及凭证状态通过 accountId 对应的账号获取。`enabled` 表示出口自身开关，即使父账号停用，列表仍保留原值；实际可发送性为账号与出口开关同时启用。
 
-仍被目标组引用的目标不能删除，返回 `409`，先解除目标组绑定。`targets/test` 只选择指定目标，复用同一 eventbus 投递链路；不存在返回 `404`，已禁用返回 `503`。测试成功受理仍是 `202`，不提供同步平台成功回执。
+`targets/save` 的 `name`、`accountId`、`enabled`、`config` 必填。省略 `id` 创建，提供 `id` 更新；accountId 必须引用存在的账号。出口允许更换账号，同时需按新账号的平台提供完整 config。无效配置返回 `400`，账号或出口不存在返回 `404`。
 
-### 3.3 目标组
+平台凭证只能通过 accounts/save 维护，不通过出口写入。为同一个 TG Bot 配置多个群时，创建多个引用同一 accountId 的出口，不重复提交 Bot Token。
+
+| 所属账号平台 | 出口 config |
+| --- | --- |
+| `feishu` | `{}`，账号已确定唯一所在群 |
+| `telegram` | `{chatId:string,messageThreadId?:正整数}` |
+
+Telegram 出口的创建示例：
+
+```json
+{
+  "name": "Telegram 运维话题",
+  "accountId": "bc355f42-2802-4243-85b6-a53fc41e8751",
+  "enabled": true,
+  "config": {
+    "chatId": "-1001234567890",
+    "messageThreadId": 123
+  }
+}
+```
+
+无需话题时省略 messageThreadId。飞书 Webhook 出口引用对应飞书账号、config 为 `{}`；一个该账号已存在其他出口时，新增或改绑第二个出口返回 `409`，禁用原出口不会释放这个名额。
+
+仍被路由组引用的出口不能删除，返回 `409`，先解除绑定。`targets/test` 只选择指定出口，复用同一 eventbus 投递链路；不存在返回 `404`，账号或出口禁用返回 `503`。测试成功受理仍是 `202`，不提供同步平台成功回执。
+
+### 3.4 路由组（TargetGroup）
+
+路由组保存 caller 到出口集合的映射，不是平台的实际聊天群，可以同时引用不同账号、不同平台的出口。
 
 | 方法 | 路径（相对管理前缀） | 请求/用途 | 成功响应 data |
 | --- | --- | --- | --- |
@@ -246,7 +298,7 @@ Telegram 目标使用 `platform="telegram"`，配置示例为 `{"chatId":"-10012
 | `401` | 入口 Bearer 无效、管理员口令错误或管理会话无效 |
 | `403` | 管理 POST 的 Origin 校验失败 |
 | `404` | 指定资源或引用的目标不存在，或 API 路由不存在 |
-| `409` | caller 重复、删除已绑定目标、删除默认组或修改默认 caller |
+| `409` | caller 重复、删除已绑定出口/有出口的账号、删除默认组或修改默认 caller、Webhook 账号重复出口 |
 | `413` | 请求体超过 64 KiB |
 | `415` | 请求媒体类型不支持 |
 | `500` | 未分类的内部错误，响应仅提供安全文案 |
